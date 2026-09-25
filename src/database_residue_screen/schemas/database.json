@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Database identity evidence; recorded metadata is not verified identity",
+  "type": "object", "additionalProperties": false,
+  "required": ["name", "kind", "build_date", "blast_version", "identity_status", "evidence_file", "evidence_sha256", "sequence_count", "base_count"],
+  "properties": {
+    "name": {"type": "string", "minLength": 1},
+    "kind": {"enum": ["blast", "synthetic_fasta"]},
+    "build_date": {"type": "string"},
+    "blast_version": {"type": "string"},
+    "identity_status": {"enum": ["unverified", "verified", "synthetic"]},
+    "evidence_file": {"type": "string"},
+    "evidence_sha256": {"type": "string", "pattern": "^([a-f0-9]{64})?$"},
+    "sequence_count": {"type": "integer", "minimum": 0},
+    "base_count": {"type": "integer", "minimum": 0}
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Per-query execution evidence, separate from matching outcome",
+  "type": "object", "additionalProperties": false,
+  "required": ["query_id", "role", "parent_id", "query_sha256", "search_id", "batch_id", "status", "exit_code", "retained_rows", "parameters_sha256", "database_sha256", "error"],
+  "properties": {
+    "query_id": {"type": "string", "minLength": 1},
+    "role": {"enum": ["real", "control"]},
+    "parent_id": {"type": "string"},
+    "query_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "search_id": {"type": "string", "minLength": 1},
+    "batch_id": {"type": "string", "minLength": 1},
+    "status": {"enum": ["success_hits", "success_zero", "failed", "incomplete"]},
+    "exit_code": {"type": "string", "pattern": "^(-?[0-9]+)?$"},
+    "retained_rows": {"type": "integer", "minimum": 0},
+    "parameters_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "database_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "error": {"type": "string"}
+  },
+  "allOf": [
+    {"if": {"properties": {"status": {"enum": ["success_hits", "success_zero"]}}},
+     "then": {"properties": {"exit_code": {"const": "0"}, "error": {"const": ""}}}},
+    {"if": {"properties": {"status": {"const": "success_zero"}}},
+     "then": {"properties": {"retained_rows": {"const": 0}}}},
+    {"if": {"properties": {"status": {"const": "success_hits"}}},
+     "then": {"properties": {"retained_rows": {"minimum": 1}}}},
+    {"if": {"properties": {"role": {"const": "control"}}},
+     "then": {"properties": {"parent_id": {"minLength": 1}}}},
+    {"if": {"properties": {"status": {"const": "failed"}}},
+     "then": {"properties": {"exit_code": {"pattern": "^-?[1-9][0-9]*$"}, "error": {"minLength": 1}}}}
+  ]
+}

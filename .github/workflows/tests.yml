@@ -1,0 +1,26 @@
+name: Python contracts and package
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install '.[test]'
+      - run: python -W error::ResourceWarning -m unittest discover -s tests -v
+      - run: python -m build
+      - run: residue-screen example .local/ci-example
+      - run: residue-screen preflight .local/ci-example/study.json --output .local/ci-example/preflight
+      - run: residue-screen validate-output .local/ci-example/study.json .local/ci-example/preflight

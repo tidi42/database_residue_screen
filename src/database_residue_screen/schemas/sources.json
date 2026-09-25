@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Sequence provenance evidence row",
+  "type": "object", "additionalProperties": false,
+  "required": ["source_id", "reference", "version", "evidence_file", "evidence_sha256", "verification", "redistribution"],
+  "properties": {
+    "source_id": {"type": "string", "minLength": 1},
+    "reference": {"type": "string"},
+    "version": {"type": "string"},
+    "evidence_file": {"type": "string"},
+    "evidence_sha256": {"type": "string", "pattern": "^([a-f0-9]{64})?$"},
+    "verification": {"enum": ["verified", "unverified", "synthetic"]},
+    "redistribution": {"enum": ["allowed", "restricted", "unknown", "synthetic"]}
+  }
+}

@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Pre-freeze study design contract 1.0.0",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "study_id", "scope", "decision_status", "approval_file", "inputs", "analysis", "search", "controls", "validation", "metadata", "figures", "companion"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "study_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]+$"},
+    "scope": {"enum": ["research", "synthetic_example"]},
+    "profile": {"enum": ["authenticated_residues", "reference_screen"]},
+    "decision_status": {"enum": ["draft", "approved"]},
+    "approval_file": {"type": "string"},
+    "inputs": {
+      "type": "object", "additionalProperties": false,
+      "required": ["queries", "query_metadata", "components", "sources", "database", "subjects", "validation_cases", "validation_subjects"],
+      "properties": {
+        "queries": {"type": "string", "minLength": 1},
+        "query_metadata": {"type": "string", "minLength": 1},
+        "components": {"type": "string", "minLength": 1},
+        "sources": {"type": "string", "minLength": 1},
+        "database": {"type": "string", "minLength": 1},
+        "subjects": {"type": "string", "minLength": 1},
+        "validation_cases": {"type": "string", "minLength": 1},
+        "validation_subjects": {"type": "string", "minLength": 1}
+      }
+    },
+    "analysis": {
+      "type": "object", "additionalProperties": false,
+      "required": ["primary_groups", "primary_endpoint", "secondary_endpoint", "condition_unit", "pooled_unit", "parent_weight", "inference", "multiplicity", "nesting", "overlap", "position_record_type", "position_topology", "unknown_record_policy", "position_windows", "minimum_record_lengths", "low_complexity_policy"],
+      "properties": {
+        "primary_groups": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "uniqueItems": true},
+        "primary_endpoint": {"const": "strict_full_query_ungapped"},
+        "secondary_endpoint": {"const": "identity95_span90_ungapped"},
+        "condition_unit": {"const": "canonical_parent_within_condition"},
+        "pooled_unit": {"const": "global_canonical_union"},
+        "parent_weight": {"const": "equal"},
+        "inference": {"const": "descriptive_fixed_panel"},
+        "multiplicity": {"const": "no_hypothesis_tests"},
+        "nesting": {"const": "disabled_until_validated"},
+        "overlap": {"const": "descriptive_only"},
+        "position_record_type": {"const": "genomic"},
+        "position_topology": {"const": "linear"},
+        "unknown_record_policy": {"const": "exclude_primary_position_report_missing"},
+        "position_windows": {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 2, "uniqueItems": true},
+        "minimum_record_lengths": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 2, "uniqueItems": true},
+        "low_complexity_policy": {"const": "report_separately_no_posthoc_filter"}
+      }
+    },
+    "search": {
+      "type": "object", "additionalProperties": false,
+      "required": ["task", "word_size", "evalue", "dust", "strand", "real_target_limit", "control_target_limit", "retention_ladder", "relative_stability_tolerance", "traceback", "completion_policy", "failure_policy"],
+      "properties": {
+        "task": {"const": "blastn-short"}, "word_size": {"type": "integer", "minimum": 4},
+        "evalue": {"type": "number", "exclusiveMinimum": 0},
+        "dust": {"type": "boolean"}, "strand": {"const": "both"},
+        "real_target_limit": {"type": "integer", "minimum": 1},
+        "control_target_limit": {"type": "integer", "minimum": 1},
+        "retention_ladder": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "relative_stability_tolerance": {"type": "number", "exclusiveMinimum": 0, "maximum": 0.1},
+        "traceback": {"const": "qseq_sseq_btop"},
+        "completion_policy": {"const": "per_query_manifest_atomic_batches"},
+        "failure_policy": {"const": "retry_then_block_matched_parent"}
+      }
+    },
+    "controls": {
+      "type": "object", "additionalProperties": false,
+      "required": ["algorithm", "algorithm_version", "k", "seed", "sampling", "parent_identity", "generation_unit", "draw_ladder", "max_mc_standard_error", "component_null"],
+      "properties": {
+        "algorithm": {"const": "ushuffle"}, "algorithm_version": {"type": "string"},
+        "k": {"const": 2}, "seed": {"type": "integer", "minimum": 0},
+        "sampling": {"const": "with_replacement"}, "parent_identity": {"const": "retain_and_report"},
+        "generation_unit": {"const": "global_canonical_parent"},
+        "draw_ladder": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+        "max_mc_standard_error": {"type": "number", "exclusiveMinimum": 0, "maximum": 0.1},
+        "component_null": {"const": "not_claimed_descriptive_segment_comparison"}
+      }
+    },
+    "validation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["unit", "independent_exact_reference", "tuning", "strict_recovery_minimum", "tolerant_recovery_minimum", "precision_minimum", "required_error_classes", "database_size_policy"],
+      "properties": {
+        "unit": {"const": "query_subject_pair"}, "independent_exact_reference": {"const": "both_strand_exhaustive"},
+        "tuning": {"type": "boolean"},
+        "strict_recovery_minimum": {"const": 1},
+        "tolerant_recovery_minimum": {"type": "number", "minimum": 0, "maximum": 1},
+        "precision_minimum": {"type": "number", "minimum": 0, "maximum": 1},
+        "required_error_classes": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "database_size_policy": {"const": "production_effective_search_space"}
+      }
+    },
+    "metadata": {
+      "type": "object", "additionalProperties": false,
+      "required": ["taxonomy_snapshot", "multi_taxid", "title_fallback", "project_missingness", "topology_unknown", "case_selection"],
+      "properties": {
+        "taxonomy_snapshot": {"type": "string"},
+        "multi_taxid": {"const": "explicit_ambiguous_not_duplicated"},
+        "title_fallback": {"const": "disabled"},
+        "project_missingness": {"const": "report_not_infer_independence"},
+        "topology_unknown": {"const": "exclude_primary_position"},
+        "case_selection": {"const": "stratified_illustrative_no_population_rate"}
+      }
+    },
+    "figures": {
+      "type": "object", "additionalProperties": false,
+      "required": ["restoration", "historical_results", "unsupported_contrasts", "audit_panels", "source_tables"],
+      "properties": {
+        "restoration": {"const": "v3_design_corrected_data"},
+        "historical_results": {"const": "never_use_as_current"},
+        "unsupported_contrasts": {"const": "not_estimated"},
+        "audit_panels": {"const": "supplement_or_revision_appendix"},
+        "source_tables": {"const": "same_versioned_event_release"}
+      }
+    },
+    "companion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reuse", "reconciliation_file", "citation_status"],
+      "properties": {
+        "reuse": {"enum": ["none", "shared", "undecided"]},
+        "reconciliation_file": {"type": "string"},
+        "citation_status": {"enum": ["pending", "available", "not_applicable"]}
+      }
+    }
+  }
+}

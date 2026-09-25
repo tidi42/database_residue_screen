@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "One-based inclusive composite component mapping",
+  "type": "object", "additionalProperties": false,
+  "required": ["composite_id", "component_id", "component_kind", "start", "end", "strand"],
+  "properties": {
+    "composite_id": {"type": "string", "minLength": 1},
+    "component_id": {"type": "string", "minLength": 1},
+    "component_kind": {"enum": ["barcode", "adapter", "primer"]},
+    "start": {"type": "integer", "minimum": 1},
+    "end": {"type": "integer", "minimum": 1},
+    "strand": {"enum": ["+", "-"]}
+  }
+}

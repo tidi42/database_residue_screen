@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Physical query metadata row, contract 1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["query_id", "group", "condition", "construct_class", "family_id", "role", "source_id", "provenance_status", "architecture_status"],
+  "properties": {
+    "query_id": {"type": "string", "pattern": "^[A-Za-z0-9_.:+-]+$"},
+    "group": {"type": "string", "minLength": 1},
+    "condition": {"type": "string", "minLength": 1},
+    "construct_class": {"enum": ["barcode", "adapter", "primer", "composite", "unknown"]},
+    "family_id": {"type": "string"},
+    "role": {"enum": ["primary", "exploratory", "reference"]},
+    "source_id": {"type": "string"},
+    "provenance_status": {"enum": ["verified", "unverified", "synthetic"]},
+    "architecture_status": {"enum": ["verified", "unverified", "synthetic", "not_applicable"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"role": {"const": "primary"}}},
+      "then": {
+        "properties": {
+          "family_id": {"minLength": 1},
+          "source_id": {"minLength": 1},
+          "provenance_status": {"enum": ["verified", "synthetic"]},
+          "construct_class": {"not": {"const": "unknown"}}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"role": {"const": "primary"}, "construct_class": {"const": "composite"}}},
+      "then": {"properties": {"architecture_status": {"enum": ["verified", "synthetic"]}}}
+    }
+  ]
+}
