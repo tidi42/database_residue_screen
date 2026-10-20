@@ -21,6 +21,7 @@ Repository = "https://github.com/tidi42/database_residue_screen"
 
 [project.optional-dependencies]
 test = ["pytest>=7.4,<9", "build>=1,<2"]
+scan = ["pyahocorasick>=2.1,<3"]
 
 [project.scripts]
 residue-screen = "database_residue_screen.cli:main"

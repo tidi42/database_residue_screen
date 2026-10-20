@@ -144,6 +144,15 @@ def parser() -> argparse.ArgumentParser:
     analyse.add_argument("--output", type=Path, required=True)
     analyse.add_argument("--calibration-migration", type=Path,
                          help="calibration_migration.json from calibrate-search; only for fixed-threshold searches without runtime calibration")
+    scan = subcommands.add_parser("exact-scan", help="Exhaustive exact occurrences of queries on both strands in every database volume; "
+                                  "independent of BLAST seeds, E-values and caps (needs pyahocorasick)")
+    scan.add_argument("queries", type=Path)
+    scan.add_argument("database", type=Path)
+    scan.add_argument("--evidence", type=Path, required=True, help="Database evidence with runtime volume names and totals")
+    scan.add_argument("--output", type=Path, required=True)
+    scan.add_argument("--blastdbcmd", default="blastdbcmd")
+    scan.add_argument("--workers", type=int, default=8)
+    scan.add_argument("--minimum-length", type=int, default=23)
     bundle = subcommands.add_parser("assemble-bundle", help="One analysable search from a migrated historical search and new calibrated "
                                     "searches; verified projections, nothing re-run")
     bundle.add_argument("panel", type=Path, help="Bundle panel whose search_queries.fasta all sources together cover")
@@ -270,6 +279,15 @@ def main(arguments: list[str] | None = None) -> int:
             result = reanalyse_legacy(args.root, args.queries, args.metadata, args.output)
         elif args.command == "analyse-search":
             result = analyse_search(args.panel, args.search, args.output, args.calibration_migration)
+        elif args.command == "exact-scan":
+            import shutil as _shutil
+            from .exact_scan import run_exact_scan
+            binary = _shutil.which(args.blastdbcmd)
+            if binary is None:
+                raise ContractError("blastdbcmd is unavailable: " + args.blastdbcmd)
+            report = run_exact_scan(args.queries, args.database, args.evidence, args.output, str(Path(binary).resolve()),
+                                    args.workers, args.minimum_length)
+            result = {key: report[key] for key in ("scanned_queries", "records", "bases", "totals_match_database", "occurrences")}
         elif args.command == "assemble-bundle":
             from .bundle import assemble_bundle
             report = assemble_bundle(args.panel, args.historical, args.migration, args.new_search, args.output, args.protocol)
