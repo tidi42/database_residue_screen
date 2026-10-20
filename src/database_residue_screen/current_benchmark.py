@@ -43,7 +43,8 @@ def check_hashes(root, files):
             raise ContractError("Frozen benchmark evidence changed: " + name)
 
 
-def prepare_benchmark(panel: Path, calibration: Path, destination: Path) -> dict:
+def prepare_benchmark(panel: Path, calibration: Path, destination: Path, extension_panel: Path | None = None,
+                      extra_lengths: tuple[int, ...] = ()) -> dict:
     definition, calibrated = read_json(panel / "panel.json"), read_json(calibration / "calibration.json")
     check_hashes(panel, definition["files"])
     check_hashes(calibration, calibrated["files"])
@@ -53,13 +54,27 @@ def prepare_benchmark(panel: Path, calibration: Path, destination: Path) -> dict
     searched = read_fasta(panel / "search_queries.fasta")
     originals = {row["parent_id"]: searched[row["parent_id"]] for row in logical if row["role"] == "real"}
     lengths = sorted({len(sequence) for sequence in originals.values()})
-    if not originals or not set(lengths) <= {row["query_length"] for row in calibrated["search_spaces"]}:
+    extension_logical, extension_originals = [], {}
+    if extension_panel is not None:
+        extension_definition = read_json(extension_panel / "panel.json")
+        check_hashes(extension_panel, extension_definition["files"])
+        extension_logical = read_table(extension_panel / "logical_queries.tsv", LOGICAL_SCHEMA)
+        extension_search = read_fasta(extension_panel / "search_queries.fasta")
+        extension_originals = {row["parent_id"]: extension_search[row["parent_id"]] for row in extension_logical if row["role"] == "real"}
+    elif extra_lengths:
+        raise ContractError("Extra benchmark lengths belong to a declared extension")
+    required = set(lengths) | {len(sequence) for sequence in extension_originals.values()} | set(extra_lengths)
+    if not originals or not required <= {row["query_length"] for row in calibrated["search_spaces"]}:
         raise ContractError("Calibration does not cover this panel's query lengths")
     dimensions = {(row["database_bases"], row["database_sequences"]) for row in calibrated["search_spaces"]}
     if len(dimensions) != 1:
         raise ContractError("Calibration mixes target database dimensions")
     bases, sequences = next(iter(dimensions))
     shards, exceptions = make_panels(originals)
+    if extension_panel is not None:
+        from .benchmark_fixtures import EXTENSION_SEED, REAL_VARIANTS, make_extension_panels
+        extension_shards, extension_exceptions = make_extension_panels(extension_originals, tuple(extra_lengths))
+        shards, exceptions = shards + extension_shards, exceptions + extension_exceptions
     destination.mkdir(parents=True, exist_ok=False)
     shutil.copytree(calibration, destination / "calibration")
     source_directory = Path(__file__).parent
@@ -70,8 +85,8 @@ def prepare_benchmark(panel: Path, calibration: Path, destination: Path) -> dict
         shutil.copyfile(source_directory / name, destination / "code" / name)
     query_rows, case_rows, truth_rows, witness_rows, shard_rows = [], [], [], [], []
     aliases = defaultdict(list)
-    for row in logical:
-        if row["role"] == "real":
+    for row in logical + extension_logical:
+        if row["role"] == "real" and row not in aliases[row["parent_id"]]:
             aliases[row["parent_id"]].append(row)
     for index, shard in enumerate(shards, 1):
         folder = destination / "fixtures" / shard["shard_id"]
@@ -102,7 +117,15 @@ def prepare_benchmark(panel: Path, calibration: Path, destination: Path) -> dict
         write_rows(destination / name, rows)
     write_rows(destination / "search_spaces.tsv", calibrated["search_spaces"])
     save_json(destination / "construction_exceptions.json", exceptions)
-    specification = dict(version="current_benchmark_v2", seed=20260922, panel_sha256=digest(panel / "panel.json"),
+    extension = None
+    if extension_panel is not None:
+        extension = dict(seed=EXTENSION_SEED, panel_sha256=digest(extension_panel / "panel.json"), panel_path=str(extension_panel.resolve()),
+                         parents=len(extension_originals), extra_lengths=sorted(set(extra_lengths)), real_variants=list(REAL_VARIANTS),
+                         combined_variants=["clip_both_at_substitution_at", "clip_both_at_substitution_over",
+                                            "reverse_clip_both_at_substitution_at"],
+                         panels=dict(C="tolerant and combined variants of every real parent", D="synthetic templates at extra lengths"))
+    specification = dict(version="current_benchmark_v3_extension" if extension else "current_benchmark_v2", seed=20260922,
+                         extension=extension, panel_sha256=digest(panel / "panel.json"),
                          panel_path=str(panel.resolve()), calibration_sha256=digest(destination / "calibration/calibration.json"),
                          binaries=calibrated["binaries"], source_code={name: digest(source_directory / name) for name in source_names},
                          actual_lengths=lengths, original_parents=len(originals),

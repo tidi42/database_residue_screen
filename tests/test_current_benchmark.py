@@ -58,3 +58,50 @@ class BenchmarkEngineTests(unittest.TestCase):
             pairs=[dict(query_id='q',subject_id=s,strict=int(('q',s) in truth['strict']),tolerant=int(('q',s) in truth['tolerant'])) for s in subjects]
             rows=analyse_arm(root/'direct',queries,subjects,pairs,{},dict(q={'complexity':'other'}),dict(shard_id='tiny',panel='A'),'local_fixture')
             self.assertEqual([r['strict_classification'] for r in rows],['recovered','correct_nonpositive'])
+
+
+class BenchmarkExtensionTests(unittest.TestCase):
+    def panel(self, root, name, sequences):
+        panel = root / name
+        panel.mkdir()
+        save_fasta(panel / 'search_queries.fasta', {canonical_id(s): s for s in sequences})
+        rows = []
+        for index, sequence in enumerate(sequences):
+            row = {key: ('' if prop['type'] == 'string' else 0) for key, prop in LOGICAL_SCHEMA['properties'].items()}
+            row.update(role='real', logical_id=f'{name}_{index}', parent_id=canonical_id(sequence), sequence_id=canonical_id(sequence),
+                       length=len(sequence), group='Foreign', condition='custom')
+            rows.append(row)
+        write_table(panel / 'logical_queries.tsv', rows, LOGICAL_SCHEMA)
+        save_json(panel / 'panel.json', dict(files={}))
+        return panel
+
+    def test_extension_keeps_historical_shards_and_adds_boundary_cases(self):
+        from database_residue_screen.benchmark_fixtures import combined_variants, make_extension_panels, make_panels
+        from database_residue_screen.benchmark_truth import sequence_witnesses
+        historical = ['AGCCTGATCAGTTGCAGGACTTAC', 'TTGACCGATCAGGCATTCAGGACTTAGCCATGCAG']
+        new = 'AAGGTTAACACAAAGACACCGACAACTTTCTTCAGCACCT'
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            old_panel, bundle = self.panel(root, 'old', historical), self.panel(root, 'bundle', historical + [new])
+            cal = root / 'calibration'
+            cal.mkdir()
+            spaces = [dict(query_length=n, database_bases=10 ** 9, database_sequences=1000, effective_search_space=10 ** 8, exact_evalue=.1)
+                      for n in (24, 35, 40, 22)]
+            save_json(cal / 'calibration.json', dict(files={}, status='engine_validated_version_matched',
+                                                    route='direct_per_query_XML_and_format7', binaries={}, search_spaces=spaces))
+            plain = prepare_benchmark(old_panel, cal, root / 'plain')
+            extended = prepare_benchmark(old_panel, cal, root / 'extended', bundle, (22,))
+            shards = {row['shard_id']: row['files'] for row in extended['shards']}
+            for row in plain['shards']:
+                self.assertEqual(shards[row['shard_id']], row['files'])
+            self.assertEqual({sid[0] for sid in shards}, {'A', 'B', 'C', 'D'})
+            self.assertEqual(extended['extension']['extra_lengths'], [22])
+            with self.assertRaises(ContractError):
+                prepare_benchmark(old_panel, cal, root / 'refused', bundle, (31,))
+        first, _ = make_extension_panels({'n': new}, (22,))
+        second, _ = make_extension_panels({'n': new}, (22,))
+        self.assertEqual(first, second)
+        self.assertEqual(make_panels({'h': historical[0]}), make_panels({'h': historical[0]}))
+        combined = combined_variants(new)
+        self.assertIsNotNone(sequence_witnesses(new, 'N' * 5 + combined['clip_both_at_substitution_at'] + 'N' * 5)['tolerant'])
+        self.assertIsNone(sequence_witnesses(new, 'N' * 5 + combined['clip_both_at_substitution_over'] + 'N' * 5)['tolerant'])

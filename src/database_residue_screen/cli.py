@@ -57,6 +57,8 @@ def parser() -> argparse.ArgumentParser:
     current.add_argument("--panel", type=Path)
     current.add_argument("--calibration", type=Path)
     current.add_argument("--workers", type=int, default=4)
+    current.add_argument("--extension-panel", type=Path, help="Panel whose real parents receive the separately seeded B01 extension shards")
+    current.add_argument("--extra-lengths", type=int, nargs="*", default=[], help="Extension template lengths (panel D)")
     calibration = subcommands.add_parser("calibrate-benchmark", help="Source-verified NCBI calibration for explicit panel lengths and DB evidence")
     calibration.add_argument("archive", type=Path)
     calibration.add_argument("binaries", type=Path)
@@ -277,7 +279,7 @@ def main(arguments: list[str] | None = None) -> int:
             if args.action == "prepare":
                 if args.panel is None or args.calibration is None:
                     raise ContractError("prepare requires --panel and --calibration")
-                result = prepare_benchmark(args.panel, args.calibration, args.destination)
+                result = prepare_benchmark(args.panel, args.calibration, args.destination, args.extension_panel, tuple(args.extra_lengths))
             else:
                 result = run_current(args.destination, args.workers)
         elif args.command == "calibrate-benchmark":
