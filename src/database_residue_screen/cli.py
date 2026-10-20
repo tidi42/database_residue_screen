@@ -144,6 +144,26 @@ def parser() -> argparse.ArgumentParser:
     analyse.add_argument("--output", type=Path, required=True)
     analyse.add_argument("--calibration-migration", type=Path,
                          help="calibration_migration.json from calibrate-search; only for fixed-threshold searches without runtime calibration")
+    insdc = subcommands.add_parser("fetch-insdc", help="Dated GenBank-header snapshot of primary eligible linear-genomic records for the "
+                                   "structured targeted/amplicon sensitivity (no titles)")
+    insdc.add_argument("analysis", type=Path)
+    insdc.add_argument("--metadata", type=Path, required=True, help="Archived ESummary directory (tech field)")
+    insdc.add_argument("--output", type=Path, required=True)
+    positional = subcommands.add_parser("positional-sensitivity", help="Terminal-event robustness: one event per accession/BioProject, "
+                                        "25-nt diagnostic window, optional INSDC targeted exclusion")
+    positional.add_argument("analysis", type=Path)
+    positional.add_argument("--metadata", type=Path, required=True, help="Archived ESummary directory (projectid field)")
+    positional.add_argument("--insdc", type=Path, help="fetch-insdc output directory")
+    positional.add_argument("--output", type=Path, required=True, help="TSV output path")
+    census = subcommands.add_parser("flank-census", help="Descriptive flank classes of retained strict hits for declared families; "
+                                    "integrity-checked local retrieval, no new search")
+    census.add_argument("analysis", type=Path)
+    census.add_argument("--panel", type=Path, required=True)
+    census.add_argument("--database", type=Path, required=True)
+    census.add_argument("--catalogue", type=Path, required=True, help="TSV set/name/sequence of catalogued barcodes")
+    census.add_argument("--taxonomy", type=Path, help="Pinned taxdump snapshot for the phage Mu lineage class")
+    census.add_argument("--blastdbcmd", default="blastdbcmd")
+    census.add_argument("--output", type=Path, required=True)
     scan = subcommands.add_parser("exact-scan", help="Exhaustive exact occurrences of queries on both strands in every database volume; "
                                   "independent of BLAST seeds, E-values and caps (needs pyahocorasick)")
     scan.add_argument("queries", type=Path)
@@ -279,6 +299,30 @@ def main(arguments: list[str] | None = None) -> int:
             result = reanalyse_legacy(args.root, args.queries, args.metadata, args.output)
         elif args.command == "analyse-search":
             result = analyse_search(args.panel, args.search, args.output, args.calibration_migration)
+        elif args.command == "fetch-insdc":
+            from .insdc import fetch_insdc_annotation, technologies_from_metadata
+            from .positional import primary_positional_events
+            events, _ = primary_positional_events(args.analysis)
+            report = fetch_insdc_annotation(sorted({row["accession_version"] for row in events}),
+                                            technologies_from_metadata(args.metadata), args.output)
+            result = {key: report[key] for key in ("requested", "status_counts", "targeted_counts")}
+        elif args.command == "positional-sensitivity":
+            from .contracts import write_table as _write_table
+            from .insdc import read_annotation
+            from .positional import SENSITIVITY_SCHEMA, positional_sensitivity, projects_from_metadata
+            rows = positional_sensitivity(args.analysis, projects_from_metadata(args.metadata),
+                                          read_annotation(args.insdc) if args.insdc else None)
+            _write_table(args.output, rows, SENSITIVITY_SCHEMA)
+            result = dict(rows=len(rows), output=str(args.output))
+        elif args.command == "flank-census":
+            import shutil as _shutil
+            from .census import run_census
+            binary = _shutil.which(args.blastdbcmd)
+            if binary is None:
+                raise ContractError("blastdbcmd is unavailable: " + args.blastdbcmd)
+            report = run_census(args.analysis, args.panel, args.database, str(Path(binary).resolve()), args.catalogue, args.output,
+                                args.taxonomy)
+            result = {key: report[key] for key in ("windows", "status_counts", "integrity_complete")}
         elif args.command == "exact-scan":
             import shutil as _shutil
             from .exact_scan import run_exact_scan
