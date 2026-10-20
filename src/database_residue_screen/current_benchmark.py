@@ -295,8 +295,10 @@ def run_benchmark(destination: Path, workers: int = 4) -> dict:
     metric_rows, detectability = summarise_benchmark(destination, specification, sorted(completions, key=lambda row: (row["shard_id"], row["arm"])))
     check_hashes(destination, specification["files"])
     check_hashes(Path(__file__).parent, specification["source_code"])
-    report = dict(contract="current_benchmark_v2", status="complete", specification_sha256=digest(destination / "benchmark_specification.json"),
+    report = dict(contract=specification["version"], status="complete", specification_sha256=digest(destination / "benchmark_specification.json"),
                   current_version="2.17.0+", original_queries=specification["original_parents"], boundary_queries=specification["boundary_templates"], independent_pair_universe=specification["query_subject_pairs"],
+                  extension=(dict(specification["extension"], shards=sum(1 for shard in specification["shards"] if shard["panel"] in {"C", "D"}))
+                             if specification.get("extension") else None),
                   arms=list(ARMS), completed_shards=len(specification["shards"]), complete_arms=len(completions),
                   truth_independent_of_output=True, predicate_disagreements=0, production_database_searches=0,
                   wall_seconds=time.monotonic() - started, workers=workers, diagnostic_evalue=1e12,
