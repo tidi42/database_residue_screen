@@ -9,7 +9,7 @@ ANNOTATION_FIELDS = ("molecule", "origin", "targeted", "organelle", "identity_st
                      "metadata_source", "metadata_date", "context")
 RECORD_PROPERTIES = {
     "molecule": {"enum": ["DNA", "RNA", "other", "unknown", "conflicting"]},
-    "origin": {"enum": ["synthetic", "vector", "engineered", "unknown", "conflicting"]},
+    "origin": {"enum": ["synthetic", "vector", "artificial_other", "engineered", "unknown", "conflicting"]},
     "targeted": {"enum": ["yes", "no", "unknown", "conflicting"]},
     "organelle": {"enum": ["yes", "no", "unknown", "conflicting"]},
     "context": {"enum": ["cellular", "viral", "unknown", "conflicting"]},
@@ -78,7 +78,7 @@ def record_eligibility(row: dict, population: str) -> tuple[str, str]:
             return "unresolved", field + "_conflicting"
     if row.get("record_type") in {"transcript", "amplicon", "synthetic", "vector"}:
         return "excluded", "record_type_" + row["record_type"]
-    if row.get("origin") in {"synthetic", "vector", "engineered"}:
+    if row.get("origin") in {"synthetic", "vector", "artificial_other", "engineered"}:
         return "excluded", "origin_" + row["origin"]
     if row.get("targeted") == "yes":
         return "excluded", "targeted_record"

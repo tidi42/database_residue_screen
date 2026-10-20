@@ -29,7 +29,18 @@ class CliTests(unittest.TestCase):
 
     def test_invalid_input_returns_nonzero_without_traceback(self):
         status, output, error = self.invoke(["preflight", "/does/not/exist/study.json"])
-        self.assertEqual(status, 2)
+        self.assertEqual(status, 1)
+        self.assertIn("Error:", error)
+        self.assertNotIn("Traceback", error)
+
+    def test_historical_calibration_commands_are_exposed_and_fail_cleanly(self):
+        from database_residue_screen.cli import parser
+        args = parser().parse_args(["analyse-search", "panel", "search", "--output", "out", "--calibration-migration", "m.json"])
+        self.assertEqual(args.calibration_migration, Path("m.json"))
+        with tempfile.TemporaryDirectory() as directory:
+            status, _, error = self.invoke(["calibrate-search", Path(directory) / "missing", "--queries", Path(directory) / "q.fa",
+                                            "--output", Path(directory) / "migration"])
+        self.assertEqual(status, 1)
         self.assertIn("Error:", error)
         self.assertNotIn("Traceback", error)
 
@@ -42,7 +53,7 @@ class CliTests(unittest.TestCase):
             value["scope"] = "research"
             study.write_text(json.dumps(value))
             self.assertEqual(self.invoke(["preflight", study, "--output", root / "report"])[0], 2)
-            self.assertEqual(self.invoke(["freeze", study, "--output", root / "bad.lock.json"])[0], 2)
+            self.assertEqual(self.invoke(["freeze", study, "--output", root / "bad.lock.json"])[0], 1)
             self.assertFalse((root / "bad.lock.json").exists())
 
 

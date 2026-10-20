@@ -51,6 +51,18 @@ def parser() -> argparse.ArgumentParser:
     database.add_argument("--blastdbcmd", default="blastdbcmd")
     database.add_argument("--study-root", type=Path)
     database.add_argument("--hash-all", action="store_true", help="Hash all database files; may read hundreds of GB")
+    current = subcommands.add_parser("current-benchmark", help="Run or prepare frozen current-engine fixtures for any supplied panel")
+    current.add_argument("action", choices=("prepare", "run"))
+    current.add_argument("destination", type=Path)
+    current.add_argument("--panel", type=Path)
+    current.add_argument("--calibration", type=Path)
+    current.add_argument("--workers", type=int, default=4)
+    calibration = subcommands.add_parser("calibrate-benchmark", help="Source-verified NCBI calibration for explicit panel lengths and DB evidence")
+    calibration.add_argument("archive", type=Path)
+    calibration.add_argument("binaries", type=Path)
+    calibration.add_argument("evidence", type=Path)
+    calibration.add_argument("queries", type=Path)
+    calibration.add_argument("--output", type=Path, required=True)
     table = subcommands.add_parser("validate-table", help="Validate one table's row contract; not a complete search-result certification")
     table.add_argument("schema_name", choices=("queries", "sources", "components", "subjects", "validation_cases", "search_status"))
     table.add_argument("table", type=Path)
@@ -69,6 +81,12 @@ def parser() -> argparse.ArgumentParser:
     search.add_argument("--targets", type=int, default=500)
     search.add_argument("--evalue", type=float, default=10.0)
     search.add_argument("--search-space", type=int)
+    search.add_argument("--threshold-mode", choices=("adaptive", "fixed"), default="fixed",
+                        help="fixed: production default; adaptive: diagnostic chance-saturated output only")
+    search.add_argument("--informativeness-limit", type=float, default=.05)
+    search.add_argument("--testable-chance-limit", type=float, default=.01)
+    search.add_argument("--maximum-evalue", type=float, help="Optional random-HSP budget; may censor short lengths")
+    search.add_argument("--study", type=Path, help="Validate and hash the declared study settings")
     search.add_argument("--blastn", default="blastn")
     search.add_argument("--timeout-seconds", type=float)
     search.add_argument("--mode", choices=("production", "working"), default="production")
@@ -124,6 +142,16 @@ def parser() -> argparse.ArgumentParser:
     analyse.add_argument("panel", type=Path)
     analyse.add_argument("search", type=Path)
     analyse.add_argument("--output", type=Path, required=True)
+    analyse.add_argument("--calibration-migration", type=Path,
+                         help="calibration_migration.json from calibrate-search; only for fixed-threshold searches without runtime calibration")
+    migration = subcommands.add_parser("calibrate-search", help="A-priori testability for a completed fixed-threshold search that predates "
+                                       "runtime calibration; reads no HSPs and repeats no search")
+    migration.add_argument("search", type=Path)
+    migration.add_argument("--queries", type=Path, required=True, help="The searched FASTA (panel search_queries.fasta)")
+    migration.add_argument("--output", type=Path, required=True)
+    migration.add_argument("--blastn", default="blastn", help="Same BLAST+ version as the historical search")
+    migration.add_argument("--informativeness-limit", type=float, default=.05)
+    migration.add_argument("--testable-chance-limit", type=float, default=.01)
     validate_analysis_command = subcommands.add_parser("validate-analysis", help="Recompute and validate result hashes, policy, parent weights, eligibility and source tables")
     validate_analysis_command.add_argument("analysis", type=Path)
     validate_analysis_command.add_argument("--require-production", action="store_true")
@@ -159,6 +187,7 @@ def parser() -> argparse.ArgumentParser:
     integrity.add_argument("database", type=Path)
     integrity.add_argument("--evidence", type=Path, required=True)
     integrity.add_argument("--output", type=Path, required=True)
+    integrity.add_argument("--probe", action="append", default=[], help="Explicit exact accession.version probe; repeat as needed")
     return command
 
 
@@ -195,11 +224,27 @@ def main(arguments: list[str] | None = None) -> int:
         elif args.command == "search":
             result = run_search(args.queries, args.database, args.evidence, args.output,
                                 search_settings(args.targets, args.evalue, args.search_space), args.threads, args.batch_size,
-                                args.blastn, args.timeout_seconds, args.mode, args.acceptance, args.reuse_search)
+                                args.blastn, args.timeout_seconds, args.mode, args.acceptance, args.reuse_search,
+                                args.threshold_mode, args.maximum_evalue, args.study, args.informativeness_limit, args.testable_chance_limit)
         elif args.command == "accept-database":
             result = accept_database(args.database, args.evidence, args.probes, args.output, args.blastn, args.download_evidence,
                                      args.timeout_seconds, args.taxonomy_support, args.blastdbcmd, args.blastdbcheck)
             result = {key: value for key, value in result.items() if key not in {"inventory", "download"}}
+        elif args.command == "current-benchmark":
+            from .current_benchmark import prepare_benchmark, run_benchmark as run_current
+            if args.action == "prepare":
+                if args.panel is None or args.calibration is None:
+                    raise ContractError("prepare requires --panel and --calibration")
+                result = prepare_benchmark(args.panel, args.calibration, args.destination)
+            else:
+                result = run_current(args.destination, args.workers)
+        elif args.command == "calibrate-benchmark":
+            from .benchmark_engine import calibrate_direct
+            from .contracts import read_json
+            from .sequences import read_fasta
+            dimensions = read_json(args.evidence)["runtime_metadata"]
+            lengths = tuple(sorted({len(s) for s in read_fasta(args.queries).values()}))
+            result = calibrate_direct(args.archive, args.binaries, args.output, dimensions["base_count"], dimensions["sequence_count"], lengths)
         elif args.command == "benchmark":
             result = run_benchmark(args.output, args.production_bases, args.seed)
         elif args.command == "prepare-panel":
@@ -216,7 +261,15 @@ def main(arguments: list[str] | None = None) -> int:
         elif args.command == "reanalyse-retained":
             result = reanalyse_legacy(args.root, args.queries, args.metadata, args.output)
         elif args.command == "analyse-search":
-            result = analyse_search(args.panel, args.search, args.output)
+            result = analyse_search(args.panel, args.search, args.output, args.calibration_migration)
+        elif args.command == "calibrate-search":
+            from .testability_migration import calibrate_existing_search
+            record = calibrate_existing_search(args.search, args.queries, args.output, args.blastn,
+                                               args.informativeness_limit, args.testable_chance_limit)
+            result = dict(kind=record["kind"], source_search_id=record["source_search_id"],
+                          lengths=[dict(query_length=row["query_length"], strict=row["strict_testability"], tolerant=row["tolerant_testability"])
+                                   for row in record["length_calibration"]["lengths"]],
+                          migration=str(args.output / "calibration_migration.json"))
         elif args.command == "validate-analysis":
             result = validate_analysis(args.analysis, args.require_production)
         elif args.command == "figure-inputs":
@@ -234,7 +287,7 @@ def main(arguments: list[str] | None = None) -> int:
             result = context_evidence(args.analysis, args.inputs, args.database, args.evidence, args.output)
             result = {key: value for key, value in result.items() if key != "files"}
         elif args.command == "audit-database-integrity":
-            result = audit_integrity(args.database, args.evidence, args.output)
+            result = audit_integrity(args.database, args.evidence, args.output, tuple(args.probe))
             result = {key: value for key, value in result.items() if key not in {"volumes", "accession_probes"}}
         else:
             rows = read_table(args.table, schema(args.schema_name))
@@ -243,7 +296,7 @@ def main(arguments: list[str] | None = None) -> int:
         return 0
     except (ContractError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"Error: {error}", file=sys.stderr)
-        return 2
+        return 1
 
 
 if __name__ == "__main__":

@@ -27,7 +27,12 @@ PILOT_SCHEMA = {
 }
 PRECISION_SCHEMA = table_schema(("group", "condition", "endpoint", "population", "measure", "estimate", "half_width", "target_half_width",
                                  "lower", "upper", "precision_met", "status"),
-                                ("draws_per_parent", "planned_parents", "matched_parents", "control_draws", "unique_seeds", "target_limited_parents"))
+                                ("draws_per_parent", "planned_parents", "matched_parents", "control_draws", "unique_seeds", "target_limited_parents", "censored_parents", "partially_censored_parents", "chance_limited_parents", "degenerate_null_parents", "required_independent_draws_for_target"))
+CONDITIONAL_SCHEMA = table_schema(("group", "endpoint", "population", "measure", "status", "reference_mean", "control_mean", "difference",
+                                   "interval_lower", "interval_upper", "tail_bound", "holm_bound", "observed_reference_total",
+                                   "expected_reference_total", "interpretation"),
+                                  ("planned_parents", "matched_parents", "control_draws", "unique_seeds", "draws_per_parent",
+                                   "a_priori_excluded_parents", "holm_family_size"))
 PARENT_PRECISION_SCHEMA = table_schema(("parent_id", "endpoint", "population", "measure", "mean_detection", "mean_breadth", "zero_success_upper", "status"),
                                        ("draws", "completed_draws", "unresolved_draws", "positive_draws", "distinct_sequences", "unique_seeds", "parent_identical_draws"))
 
@@ -96,6 +101,7 @@ def precision_rows(outcomes: list[dict], specification: dict, target_limit: int,
                     selected = [row for parent in eligible for row in controls[parent]]
                     seeds = [row["seed"] for row in selected]
                     status = "not_searched" if draws > available_draws else "no_resolved_matched_population" if not selected else "conditional_bound"
+                    required = 0
                     values = dict(estimate="not_estimated", half_width="not_estimated", target_half_width="not_estimated", lower="not_estimated", upper="not_estimated", precision_met="not_estimated")
                     if selected:
                         estimate = statistics.mean(row[field] for row in selected)
@@ -103,14 +109,17 @@ def precision_rows(outcomes: list[dict], specification: dict, target_limit: int,
                             raise ContractError("Observed retained outcome exceeds the declared precision bound")
                         radius = grouped_half_width(seeds, alpha, bound)
                         target = specification["detection_half_width"] if measure == "detection" else max(specification["breadth_absolute_half_width"], specification["breadth_relative_half_width"] * estimate)
+                        required = math.ceil(math.log(2 / alpha) * bound**2 / (2 * target**2))
                         values.update(estimate=str(estimate), half_width=str(radius), target_half_width=str(target),
                                       lower=str(max(0, estimate - radius)), upper=str(min(bound, estimate + radius)), precision_met="yes" if radius <= target else "no")
-                        if len(eligible) != len(real) - attrition["short"]:
+                        if len(eligible) != len(real) - attrition["short"] - attrition["censored"] - attrition["partial"] - attrition["chance_limited"]:
                             status = "diagnostic_resolved_subset_no_coverage_claim"
                             values["precision_met"] = "not_estimated"
                     rows.append(dict(group=group, condition=condition, endpoint=endpoint, population=population, measure=measure,
                                      draws_per_parent=draws, planned_parents=len(real), matched_parents=len(eligible), control_draws=len(selected),
-                                     unique_seeds=len(set(seeds)), target_limited_parents=attrition["target_limited"], status=status, **values))
+                                     unique_seeds=len(set(seeds)), censored_parents=attrition["censored"], partially_censored_parents=attrition["partial"], chance_limited_parents=attrition["chance_limited"],
+                                     degenerate_null_parents=attrition["degenerate_null"], required_independent_draws_for_target=required,
+                                     target_limited_parents=attrition["target_limited"], status=status, **values))
         if draws <= available_draws:
             for endpoint, population in strata:
                 for measure in ("detection", "breadth"):
@@ -133,6 +142,75 @@ def precision_rows(outcomes: list[dict], specification: dict, target_limit: int,
     return rows, parent_rows
 
 
+def format_log_probability(value: float) -> str:
+    """Print exp(value) without underflow; extreme bounds never become zero."""
+    if value >= math.log(1e-300):
+        return str(math.exp(value))
+    exponent = math.floor(value / math.log(10))
+    return f"{10 ** (value / math.log(10) - exponent):.6f}e{exponent}"
+
+
+def conditional_rows(outcomes: list[dict], specification: dict, target_limit: int,
+                     endpoint: str = "strict", population: str = "all_records") -> list[dict]:
+    """Post hoc reference-versus-generator contrasts with Holm adjustment (S8.6).
+
+    D = reference mean - control generator mean. The stage-protected Hoeffding
+    interval for the generator mean (precision radius at alpha/K) is subtracted
+    from the fixed reference mean; p = min(1, 2K exp(-2 D^2 / (B^2 sum w^2))).
+    Holm covers every group-by-measure slot, retaining non-estimable slots as
+    one. Bounds concern Monte Carlo error of the generator expectation for fixed
+    sequences, not exchangeability, contamination or generalisation; expected
+    versus observed totals are reported alongside.
+    """
+    validate_pilot(specification)
+    if target_limit < 1:
+        raise ContractError("Conditional contrasts require the declared retention bound")
+    stages, draws = len(specification["draw_ladder"]), specification["draw_ladder"][-1]
+    alpha = (1 - specification["confidence"]) / stages
+    subset = [row for row in outcomes if row["role"] == "real" or row["draw_index"] <= draws]
+    groups = sorted({row["group"] for row in outcomes if row["role"] == "real"})
+    rows, logs = [], []
+    for group in groups:
+        for measure, field, bound in (("detection", "positive", 1), ("breadth", "retained_accessions", target_limit)):
+            real, controls, eligible, attrition = matched_population(subset, group, "all_conditions", endpoint, population, draws, measure=measure)
+            selected = [row for parent in eligible for row in controls[parent]]
+            excluded = attrition["short"] + attrition["censored"] + attrition["partial"] + attrition["chance_limited"]
+            status = ("no_resolved_matched_population" if not selected else "conditional_bound" if len(eligible) == len(real) - excluded
+                      else "diagnostic_resolved_subset_no_coverage_claim")
+            values = {name: "not_estimated" for name in ("reference_mean", "control_mean", "difference", "interval_lower", "interval_upper",
+                                                         "tail_bound", "observed_reference_total", "expected_reference_total")}
+            log_tail = 0.0
+            if selected:
+                if any(not 0 <= row[field] <= bound for row in selected) or any(not 0 <= row[field] <= bound for row in eligible.values()):
+                    raise ContractError("Observed retained outcome exceeds the declared conditional bound")
+                reference = statistics.mean(row[field] for row in eligible.values())
+                control = statistics.mean(statistics.mean(row[field] for row in controls[parent]) for parent in eligible)
+                values.update(reference_mean=str(reference), control_mean=str(control), difference=str(reference - control),
+                              observed_reference_total=str(sum(row[field] for row in eligible.values())),
+                              expected_reference_total=str(sum(statistics.mean(row[field] for row in controls[parent]) for parent in eligible)))
+                if status == "conditional_bound":
+                    seeds = [row["seed"] for row in selected]
+                    radius = grouped_half_width(seeds, alpha, bound)
+                    squared = sum((count / len(seeds)) ** 2 for count in Counter(seeds).values())
+                    log_tail = min(0.0, math.log(2 * stages) - 2 * (reference - control) ** 2 / (bound ** 2 * squared))
+                    values.update(interval_lower=str(reference - min(bound, control + radius)),
+                                  interval_upper=str(reference - max(0, control - radius)), tail_bound=format_log_probability(log_tail))
+            logs.append(log_tail)
+            rows.append(dict(group=group, endpoint=endpoint, population=population, measure=measure, status=status,
+                             planned_parents=len(real), matched_parents=len(eligible), control_draws=len(selected),
+                             unique_seeds=len({row["seed"] for row in selected}), draws_per_parent=draws, a_priori_excluded_parents=excluded,
+                             interpretation="Post hoc exploratory; Monte Carlo error of the shuffle-generator mean for fixed sequences. "
+                                            "Not exchangeability, contamination, equivalence or generalisation evidence.", **values))
+    family = len(rows)
+    order = sorted(range(family), key=lambda index: logs[index])
+    running = -math.inf
+    for rank, index in enumerate(order):
+        running = max(running, min(0.0, math.log(family - rank) + logs[index]))
+        rows[index]["holm_bound"] = format_log_probability(running) if rows[index]["status"] == "conditional_bound" else "not_estimated"
+        rows[index]["holm_family_size"] = family
+    return rows
+
+
 def assess_precision(analysis: Path, specification_file: Path, destination: Path) -> dict:
     source = read_json(analysis / "analysis.json")
     specification = validate_pilot(read_json(specification_file))
@@ -148,12 +226,17 @@ def assess_precision(analysis: Path, specification_file: Path, destination: Path
     destination.mkdir(parents=True, exist_ok=False)
     write_table(destination / "precision.tsv", rows, PRECISION_SCHEMA)
     write_table(destination / "parent_precision.tsv", parents, PARENT_PRECISION_SCHEMA)
+    if specification["draw_ladder"][-1] <= source["draws_per_parent"]:
+        write_table(destination / "conditional_contrasts.tsv",
+                    conditional_rows(outcomes, specification, source["search_settings"]["max_target_seqs"]), CONDITIONAL_SCHEMA)
     final_stage = [row for row in rows if row["draws_per_parent"] == specification["draw_ladder"][-1]]
     report = dict(stage="conditional_null_precision_not_retrieval_acceptance", result_contract="measure_precision_v2", final_freeze=False,
                   source_analysis_sha256=digest(analysis / "analysis.json"), specification_sha256=digest(specification_file),
                   all_final_stage_targets_met=bool(final_stage) and all(row["precision_met"] == "yes" and row["status"] == "conditional_bound" for row in final_stage),
                   biological_sampling_uncertainty=False, retrieval_adequacy_established=False,
                   bound="Hoeffding with total weight grouped by seed; simultaneous across fixed stages per stratum, conditional on independence between seed streams",
-                  stopping=specification["stopping"], files={name: digest(destination / name) for name in ("precision.tsv", "parent_precision.tsv")})
+                  stopping=specification["stopping"],
+                  conditional_contrasts="Post hoc exploratory reference-generator contrasts with Holm over all group-by-measure slots (S8.6)",
+                  files={path.name: digest(path) for path in sorted(destination.glob("*.tsv"))})
     save_json(destination / "precision.json", report)
     return report

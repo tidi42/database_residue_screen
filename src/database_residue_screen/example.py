@@ -26,7 +26,7 @@ def draft_study(study_id: str, scope: str = "research") -> dict:
         search=dict(task="blastn-short", word_size=7, evalue=10.0, dust=False, strand="both", real_target_limit=500,
                     control_target_limit=500, retention_ladder=[500, 2000, 10000], relative_stability_tolerance=0.01,
                     traceback="qseq_sseq_btop", completion_policy="per_query_manifest_atomic_batches",
-                    failure_policy="retry_then_block_matched_parent"),
+                    failure_policy="abort_run_resume_retries_failed_batches"),
         controls=dict(algorithm="ushuffle", algorithm_version="", k=2, seed=42, sampling="with_replacement",
                       parent_identity="retain_and_report", generation_unit="global_canonical_parent",
                       draw_ladder=[10, 50, 100], max_mc_standard_error=0.01,

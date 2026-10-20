@@ -7,13 +7,13 @@ from .policy import applicability, validate_policy
 
 
 OUTCOME_SCHEMA = table_schema(("logical_id", "role", "parent_id", "sequence_id", "group", "condition", "endpoint", "population",
-                               "applicability", "completion", "resolution", "detection_resolution", "breadth_resolution", "retrieval"),
+                               "applicability", "completion", "resolution", "detection_resolution", "breadth_resolution", "retrieval", "null_state"),
                               ("draw_index", "length", "seed", "retained_accessions", "positive", "unresolved_subjects", "excluded_subjects"))
 MEASURES = ("real_detection_rate", "parent_weighted_control_rate", "paired_detection_difference", "real_mean_breadth",
             "parent_weighted_control_breadth", "paired_breadth_difference", "mc_detection_se", "mc_breadth_se", "zero_control_probability_upper95")
 CONTRAST_SCHEMA = table_schema(("group", "condition", "endpoint", "population", "measure", "mc_assumptions") + MEASURES,
                                ("planned_parents", "eligible_parents", "excluded_short_parents", "unresolved_parents", "incomplete_parents",
-                                "real_positive", "control_draws", "draws_per_parent", "target_limited_parents"))
+                                "censored_parents", "partially_censored_parents", "chance_limited_parents", "degenerate_null_parents", "real_positive", "control_draws", "draws_per_parent", "target_limited_parents"))
 MEMBERSHIP_SCHEMA = table_schema(("sequence_id", "role", "parent_id", "group", "condition"))
 ELIGIBILITY_SCHEMA = table_schema(("sequence_id", "accession_version", "population", "state", "reason"))
 OUTCOME_V1_SCHEMA = table_schema(tuple(name for name, field in OUTCOME_SCHEMA["properties"].items()
@@ -115,14 +115,21 @@ def build_outcomes(events: list[dict], logical: list[dict], statuses: list[dict]
                 resolution = ("not_completed" if not completed else "positive_with_unresolved_breadth" if included and unresolved else
                               "unresolved" if unresolved else "resolved_positive" if included else "resolved_zero")
                 applicable = applicability(row["length"], endpoint, policy)
-                unavailable = "not_completed" if not completed else "inapplicable" if applicable != "operational_retained_search" else ""
+                if row["parent_id"] in policy.get("degenerate_parent_ids", []):
+                    null_state = "proven_singleton_null"
+                else:
+                    null_state = "not_proven_singleton"
+                censored = applicable in {"censored_untestable", "partially_score_censored", "chance_limited"}
+                if censored:
+                    resolution = applicable
+                unavailable = applicable if censored else "not_completed" if not completed else "inapplicable" if applicable != "operational_retained_search" else ""
                 outcomes.append(dict(**{name: row[name] for name in ("logical_id", "role", "parent_id", "sequence_id", "group", "condition", "draw_index", "length", "seed")},
                                      endpoint=endpoint, population=population, applicability=applicable,
                                      completion="successful" if completed else status["status"], resolution=resolution,
                                      detection_resolution=unavailable or ("unresolved" if unresolved and not included else "resolved"),
                                      breadth_resolution=unavailable or ("unresolved" if unresolved else "resolved"),
-                                     retrieval="target_limit_reached" if status["target_limit_reached"] == "yes" else "retained_not_exhaustive",
-                                     retained_accessions=included, positive=1 if included else -1 if unresolved or not completed else 0,
+                                     null_state=null_state, retrieval="target_limit_reached" if status["target_limit_reached"] == "yes" else "retained_not_exhaustive",
+                                     retained_accessions=included, positive=-1 if censored else 1 if included else -1 if unresolved or not completed or censored else 0,
                                      unresolved_subjects=unresolved, excluded_subjects=len(selected["excluded"])))
     contrasts = matched_contrasts(outcomes, draws_per_parent, seed_reuse)
     membership_keys = {(row["query_id"], row["accession_version"], population) for row in events for population in policy["record_populations"]}
@@ -150,7 +157,15 @@ def matched_population(outcomes: list[dict], group: str, condition: str, endpoin
         if len(draws) != draws_per_parent or {row["draw_index"] for row in draws} != set(range(1, draws_per_parent + 1)):
             raise ContractError("Matched outcomes do not contain the declared draw identities")
         family = [original] + draws
-        if any(row["applicability"] != "operational_retained_search" for row in family):
+        if original.get("null_state") == "proven_singleton_null":
+            attrition["degenerate_null"] += 1
+        if any(row["applicability"] == "censored_untestable" for row in family):
+            attrition["censored"] += 1
+        elif any(row["applicability"] == "chance_limited" for row in family):
+            attrition["chance_limited"] += 1
+        elif any(row["applicability"] == "partially_score_censored" for row in family):
+            attrition["partial"] += 1
+        elif any(row["applicability"] != "operational_retained_search" for row in family):
             attrition["short"] += 1
         elif any(row["completion"] != "successful" for row in family):
             attrition["incomplete"] += 1
@@ -187,15 +202,18 @@ def matched_contrasts(outcomes: list[dict], draws_per_parent: int, seed_reuse: i
                              else ("real_mean_breadth", "parent_weighted_control_breadth", "paired_breadth_difference"))
                     measures.update(zip(names, map(str, (original_mean, control_mean, original_mean - control_mean))))
                     if not seed_reuse:
-                        if measure == "detection":
-                            measures["zero_control_probability_upper95"] = str(1 - 0.05 ** (1 / draws_per_parent))
+                        if measure == "detection" and not any(row[field] for parent in eligible for row in controls[parent]):
+                            # Independent, possibly heterogeneous Bernoulli draws:
+                            # product(1-p_i) <= (1-mean(p_i))**N (AM-GM).
+                            measures["zero_control_probability_upper95"] = str(1 - 0.05 ** (1 / (size * draws_per_parent)))
                         if draws_per_parent > 1:
                             measures["mc_" + measure + "_se"] = str(sum(statistics.variance(row[field] for row in controls[parent]) / draws_per_parent
                                                                          for parent in eligible) ** 0.5 / size)
                 contrasts.append(dict(group=group, condition=condition, endpoint=endpoint, population=population, measure=measure,
                                       mc_assumptions=assumptions, planned_parents=len(real), eligible_parents=size,
                                       excluded_short_parents=attrition["short"], unresolved_parents=attrition["unresolved"],
-                                      incomplete_parents=attrition["incomplete"], real_positive=sum(row["positive"] for row in eligible.values()),
+                                      incomplete_parents=attrition["incomplete"], censored_parents=attrition["censored"],
+                                      partially_censored_parents=attrition["partial"], chance_limited_parents=attrition["chance_limited"], degenerate_null_parents=attrition["degenerate_null"], real_positive=sum(row["positive"] for row in eligible.values()),
                                       control_draws=size * draws_per_parent, draws_per_parent=draws_per_parent,
                                       target_limited_parents=attrition["target_limited"], **measures))
     return contrasts

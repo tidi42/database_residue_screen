@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import time
 from datetime import datetime, timezone
@@ -31,13 +32,39 @@ def summary_record(record: dict, requested: set[str], date: str) -> dict | None:
     molecule = "DNA" if moltype in {"dna", "genomic dna"} else "RNA" if moltype in {"rna", "genomic rna", "mrna", "rrna", "trna", "ncrna"} else "unknown"
     if record_type == "transcript":
         molecule = "conflicting" if molecule == "DNA" else "RNA"
-    if record.get("taxid") in {32630, 81077}:
-        record_type = "synthetic" if record.get("taxid") == 32630 else "vector"
+    origin = {32630: "synthetic", 29278: "vector", 81077: "artificial_other"}.get(record.get("taxid"), "unknown")
+    if origin in {"synthetic", "vector"}:
+        record_type = origin
     return dict(raw_id=accession, accession_version=accession, length=int(record["slen"]), topology=topology,
                 record_type=record_type, taxids=str(record.get("taxid", "")), assembly_id="", project_id=str(record.get("projectid", "")),
-                molecule=molecule, origin=record_type if record_type in {"synthetic", "vector"} else "unknown",
+                molecule=molecule, origin=origin,
                 targeted="unknown", organelle="unknown", context="unknown",
                 metadata_source="NCBI nuccore ESummary accession-version exact match", metadata_date=date)
+
+
+
+def summary_with_retry(request, attempts=3):
+    """Bounded retries; each failed attempt is retained as evidence."""
+    failures = []
+    email = os.environ.get("NCBI_EMAIL")
+    if email:
+        request = Request(request.full_url + "&" + urlencode(dict(email=email)), headers=dict(request.header_items()))
+    for attempt in range(1, attempts + 1):
+        try:
+            with urlopen(request, timeout=60) as response:
+                payload = json.load(response)
+            if not isinstance(payload.get("result"), dict) or payload.get("error"):
+                raise ValueError("ESummary did not return a valid result")
+            return payload, failures
+        except (OSError, ValueError) as error:
+            failures.append(dict(attempt=attempt, reason="retrieval_attempt_failed", error=str(error),
+                                 retrieved_utc=datetime.now(timezone.utc).isoformat()))
+            if attempt == attempts:
+                # Caller archives the terminal failure separately; attach full audit.
+                failure = OSError("ESummary retries exhausted")
+                failure.attempts = failures
+                raise failure from error
+            time.sleep(0.4 * 2**(attempt - 1))
 
 
 def fetch_metadata(analysis: Path, destination: Path, batch_size: int = 100, reuse_metadata: Path | None = None) -> dict:
@@ -94,8 +121,8 @@ def fetch_metadata(analysis: Path, destination: Path, batch_size: int = 100, reu
         batch_path = destination / f"esummary_{offset // batch_size + 1:04d}.json"
         try:
             request = Request(url, headers={"User-Agent": "database-residue-screen/0.1 research-metadata"})
-            with urlopen(request, timeout=60) as response:
-                payload = json.load(response)
+            payload, attempts = summary_with_retry(request)
+            problems.extend(dict(requested_batch=sorted(identifiers), **attempt) for attempt in attempts)
             save_json(batch_path, payload)
             batch_info = dict(file=batch_path.name, sha256=digest(batch_path), requested=sorted(identifiers), url=url,
                               retrieved_utc=datetime.now(timezone.utc).isoformat())
@@ -120,6 +147,7 @@ def fetch_metadata(analysis: Path, destination: Path, batch_size: int = 100, reu
                 else:
                     rows[observed["accession_version"]] = observed
         except (OSError, ValueError, KeyError) as error:
+            problems.extend(dict(requested_batch=sorted(identifiers), **attempt) for attempt in getattr(error, "attempts", []))
             problems.append(dict(requested_batch=sorted(identifiers), reason="retrieval_failed", error=str(error)))
         print(f"Metadata: {min(offset + batch_size, len(missing))}/{len(missing)} uncached requested, {len(rows)} exact-version records matched", flush=True)
     write_table(destination / "subjects.tsv", list(rows.values()), record_schema())

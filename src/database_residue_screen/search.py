@@ -13,10 +13,11 @@ from pathlib import Path
 
 from .acceptance import validate_acceptance
 from .contracts import ContractError, read_json, read_table, write_table
-from .database import verify_inventory
+from .database import verify_inventory, parse_database_info
 from .design import digest
 from .database_integrity import assert_single_build, volume_evidence
 from .example import save_fasta, save_json
+from .length_aware import calibrate_lengths
 from .matching import BLAST_FIELDS, parse_blast_hsp, strict_hsp, tolerant_hsp
 from .sequences import read_fasta
 
@@ -175,7 +176,9 @@ def reuse_completed_batch(source: Path, destination: Path, request: dict, batch_
 def run_search(query_fasta: Path, database_prefix: Path, database_evidence: Path, destination: Path,
                settings: dict | None = None, threads: int = 8, batch_size: int = 256, executable: str = "blastn",
                timeout_seconds: float | None = None, mode: str = "production", acceptance: Path | None = None,
-               reuse_search: Path | None = None) -> dict:
+               reuse_search: Path | None = None, threshold_mode: str = "fixed",
+               maximum_evalue: float | None = None, study: Path | None = None,
+               informative_limit: float = .05, testable_limit: float = .01) -> dict:
     if mode not in {"production", "working"} or mode == "production" and acceptance is None or mode == "working" and acceptance is not None:
         raise ContractError("Production search requires --acceptance; working mode must be explicitly selected without production acceptance")
     settings = search_settings() if settings is None else settings
@@ -193,17 +196,31 @@ def run_search(query_fasta: Path, database_prefix: Path, database_evidence: Path
         raise ContractError("BLAST executable is unavailable: " + executable)
     binary = str(Path(binary).resolve())
     version = subprocess.run([binary, "-version"], capture_output=True, text=True, check=True, timeout=30).stdout.strip()
-    environment_overrides = dict(LC_ALL="C")
+    info = subprocess.run([str(Path(binary).with_name("blastdbcmd")), "-db", str(prefix), "-info"],
+                          capture_output=True, text=True, check=True, env=dict(os.environ, LC_ALL="C"), timeout=120)
+    runtime_metadata = parse_database_info(info.stdout)
+    if runtime_metadata != database["runtime_metadata"]:
+        raise ContractError("Runtime database dimensions or identity changed since inspection")
+    environment_overrides = dict(LC_ALL="C", BLAST_USAGE_REPORT="false")
     if accepted:
         environment_overrides["BLASTDB"] = accepted["taxonomy_support"]["directory"]
     request = dict(kind="accepted_production_search_not_final_freeze" if accepted else "working_search_not_final_freeze",
                    mode=mode, database_acceptance=accepted, environment=environment_overrides,
-                   queries_sha256=digest(query_fasta), query_count=len(queries),
+                   queries_sha256=digest(query_fasta), query_count=len(queries), database_runtime_metadata=runtime_metadata,
                    database_prefix=str(prefix), database_evidence_sha256=digest(database_evidence),
                    database_metadata_conflicts=database["metadata_conflicts"], database_identity_verified=bool(accepted),
                    executable=binary, executable_version=version, executable_sha256=digest(Path(binary)),
                    settings=settings, threads=threads, batch_size=batch_size,
                    runner_sha256=digest(Path(__file__)), parser_sha256=digest(Path(__file__).with_name("matching.py")))
+    calibration = calibrate_lengths(binary, [len(sequence) for sequence in queries.values()], database["runtime_metadata"],
+                                    settings, threshold_mode, maximum_evalue, informative_limit, testable_limit)
+    request["length_calibration"] = calibration
+    request["calibration_code_sha256"] = digest(Path(__file__).with_name("length_aware.py"))
+    request["failure_policy"] = "abort_run_resume_retries_failed_batches"
+    if study is not None:
+        from .study_binding import bind_study
+        request["study_binding"] = bind_study(study, settings, threshold_mode, maximum_evalue, informative_limit, testable_limit)
+    by_length = {row["query_length"]: row for row in calibration["lengths"]}
     if reuse_search is not None:
         reuse_search = reuse_search.resolve()
         if reuse_search == destination.resolve() or (reuse_search / "quarantine.json").exists():
@@ -220,13 +237,21 @@ def run_search(query_fasta: Path, database_prefix: Path, database_evidence: Path
         save_json(destination / "request.json", request)
         shutil.copyfile(database_evidence, destination / "database_evidence.json")
     all_rows, batch_records = [], []
-    identifiers = sorted(queries)
-    for offset in range(0, len(identifiers), batch_size):
+    # Homogeneous length batches ensure each query receives its own statistical
+    # threshold and search space. Stable order is part of the request contract.
+    batches = []
+    for length in sorted(by_length):
+        identifiers = sorted(name for name in queries if len(queries[name]) == length)
+        batches.extend(identifiers[offset:offset + batch_size] for offset in range(0, len(identifiers), batch_size))
+    for batch_index, identifiers in enumerate(batches):
         if accepted and (digest(acceptance) != accepted["sha256"] or (acceptance.parent / "quarantine.json").exists()):
             raise ContractError("Database acceptance changed or was quarantined during search")
         verify_database(database_evidence, prefix, hash_content=False)
-        batch_id = f"batch_{offset // batch_size + 1:05d}"
-        batch_queries = {query_id: queries[query_id] for query_id in identifiers[offset:offset + batch_size]}
+        batch_id = f"batch_{batch_index + 1:05d}"
+        batch_queries = {query_id: queries[query_id] for query_id in identifiers}
+        calibrated = by_length[len(next(iter(batch_queries.values())))]
+        batch_settings = dict(settings, evalue=calibrated["evalue"], word_size=calibrated["word_size"],
+                              searchsp=calibrated["effective_search_space"])
         attempts = sorted(destination.glob(batch_id + ".attempt_*"))
         completed = [attempt for attempt in attempts if (attempt / "complete.json").is_file()]
         if len(completed) > 1:
@@ -247,7 +272,7 @@ def run_search(query_fasta: Path, database_prefix: Path, database_evidence: Path
             command = [binary, "-query", str((attempt / "queries.fasta").resolve()), "-db", str(prefix),
                        "-out", str((attempt / "blast.tsv").resolve()), "-outfmt", "7 " + " ".join(BLAST_FIELDS),
                        "-num_threads", str(threads)]
-            for key, value in settings.items():
+            for key, value in batch_settings.items():
                 if value is not None:
                     command.extend(["-" + key, str(value)])
             save_json(attempt / "command.json", dict(command=command, environment=environment_overrides, search_id=search_id,
@@ -292,9 +317,15 @@ def run_search(query_fasta: Path, database_prefix: Path, database_evidence: Path
         batch_records.append(dict(directory=attempt.name, completion_sha256=digest(attempt / "complete.json"),
                       elapsed_seconds=record["elapsed_seconds"], output_bytes=record["output_bytes"],
                       child_process_maxrss=record["child_process_maxrss"]))
+    all_rows.sort(key=lambda row: row["query_id"])
     report = dict(search_id=search_id, all_queries_completed=True, final_research_freeze=False,
                   mode=mode, database_acceptance=accepted, output_bytes=sum(row["output_bytes"] for row in batch_records),
                   submitted_queries=len(queries), completed_queries=len(all_rows),
+                  censored_queries=sum(not by_length[len(sequence)]["strict_testable"] for sequence in queries.values()),
+                  partially_censored_queries=sum(by_length[len(sequence)]["strict_testable"] and not by_length[len(sequence)]["tolerant_fully_testable"] for sequence in queries.values()),
+                  testability_counts={endpoint: {state: sum(by_length[len(seq)][endpoint + "_testability"] == state for seq in queries.values())
+                                                for state in ("testable", "chance_limited", "censored_untestable")}
+                                      for endpoint in ("strict", "tolerant")},
                   success_zero=sum(row["status"] == "success_zero" for row in all_rows),
                   hsp_rows=sum(row["hsp_rows"] for row in all_rows),
                   target_limit_reached=sum(row["target_limit_reached"] == "yes" for row in all_rows),

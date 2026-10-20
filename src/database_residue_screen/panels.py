@@ -127,6 +127,10 @@ def prepare_panel(query_fasta: Path, query_metadata: Path, controls_directory: P
                             provenance_status="generated", architecture_status="not_applicable"))
     if seen_draws != {(parent, index) for parent in parents for index in range(1, draws + 1)}:
         raise ContractError("One or more canonical parents lack the requested control draws")
+    from .controls import null_space_status
+    # Flag only proven singleton spaces; retain their declared sampling weights.
+    policy = dict(policy, degenerate_parent_ids=sorted(parent for parent in parents
+                       if null_space_status(search_sequences[parent]) == "proven_singleton_null"))
     destination.mkdir(parents=True, exist_ok=False)
     save_fasta(destination / "search_queries.fasta", dict(sorted(search_sequences.items())))
     write_table(destination / "logical_queries.tsv", logical, LOGICAL_SCHEMA)

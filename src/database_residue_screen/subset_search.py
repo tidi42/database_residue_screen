@@ -22,6 +22,17 @@ PROJECTION_FILES = {"queries.fasta", "blast.tsv", "stderr.txt", "stdout.txt", "s
 def require_same_science(request, original):
     if any(request.get(name) != original.get(name) for name in SCIENCE_FIELDS):
         raise ContractError("Query reuse requires the same database, executable, parser and scientific settings")
+    left, right = request.get("length_calibration"), original.get("length_calibration")
+    if bool(left) != bool(right) or request.get("study_binding") != original.get("study_binding"):
+        raise ContractError("Query reuse requires matching calibration and study binding")
+    if left:
+        keys = ("method", "threshold_mode", "maximum_evalue", "informativeness_limit", "testable_chance_limit", "chance_model")
+        a = {row["query_length"]: row for row in left["lengths"]}
+        b = {row["query_length"]: row for row in right["lengths"]}
+        if (any(left[k] != right[k] for k in keys) or
+                any(a[length] != b[length] for length in a.keys() & b.keys()) or
+                request.get("calibration_code_sha256") != original.get("calibration_code_sha256")):
+            raise ContractError("Query reuse requires the same per-length thresholds and scoring calibration")
 
 
 def panel_queries(panel):
@@ -177,6 +188,13 @@ def assemble_subset(panel, sources, destination):
         raise ContractError(f"Selected panel has {len(queries.keys() - covered)} queries without completed evidence")
     baseline = requests[0]["request"]
     request = {name: value for name, value in baseline.items() if name != "reuse_source"}
+    if request.get("length_calibration"):
+        lengths = {len(sequence) for sequence in queries.values()}
+        merged = {row["query_length"]: row for source in requests for row in source["request"]["length_calibration"]["lengths"]
+                  if row["query_length"] in lengths}
+        if set(merged) != lengths:
+            raise ContractError("Subset calibration does not cover its query lengths")
+        request["length_calibration"] = dict(request["length_calibration"], lengths=[merged[length] for length in sorted(merged)])
     request.update(queries_sha256=digest(panel / "search_queries.fasta"), query_count=len(queries),
                    assembly_contract="verified_query_projection_v1", source_searches=requests,
                    assembler_sha256=digest(Path(__file__)),
@@ -206,7 +224,8 @@ def assemble_subset(panel, sources, destination):
         rows = summarise_batch(directory / "blast.tsv", {name: queries[name] for name in query_ids}, batch_id, request["settings"]["max_target_seqs"])
         write_table(directory / "status.tsv", rows, STATUS_SCHEMA)
         record = projection_record(directory, request, source, original, batch_id, query_ids)
-        save_json(directory / "complete.json", record)
+        save_json(directory / "complete.pending.json", record)
+        (directory / "complete.pending.json").rename(directory / "complete.json")
         validate_projection_batch(directory, request, record)
         statuses.extend(rows)
         batches.append(dict(directory=directory.name, completion_sha256=digest(directory / "complete.json"),
@@ -218,7 +237,8 @@ def assemble_subset(panel, sources, destination):
                   hsp_rows=sum(row["hsp_rows"] for row in statuses), target_limit_reached=sum(row["target_limit_reached"] == "yes" for row in statuses),
                   output_bytes=sum(row["output_bytes"] for row in batches), batches=batches,
                   interpretation="Verified per-query subset of matching completed searches; retained results, not exhaustive retrieval")
-    save_json(destination / "complete.json", report)
+    save_json(destination / "complete.pending.json", report)
+    (destination / "complete.pending.json").rename(destination / "complete.json")
     return report
 
 

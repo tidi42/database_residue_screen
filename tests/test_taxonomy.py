@@ -50,6 +50,19 @@ class TaxonomyTests(unittest.TestCase):
         self.assertEqual(conflict["taxon_id"], "")
         self.assertEqual(reconcile_taxids(self.taxonomy, "", "11", "genus")["source_status"], "record_only")
 
+    def test_artificial_sequences_are_not_all_vectors(self):
+        source = self.root / "source"
+        with (source / "nodes.dmp").open("a") as handle:
+            for identifier, parent in ((81077,1),(29278,81077),(90,29278),(91,81077)):
+                handle.write(f"{identifier}\t|\t{parent}\t|\tno rank\t|\n")
+        with (source / "names.dmp").open("a") as handle:
+            for identifier in (81077,29278,90,91):
+                handle.write(f"{identifier}\t|\ttaxon_{identifier}\t|\t\t|\tscientific name\t|\n")
+        taxonomy = Taxonomy.from_directory(source)
+        self.assertEqual(taxonomy.context(90), "vector")
+        self.assertEqual(taxonomy.context(91), "artificial_other")
+        self.assertEqual(taxonomy.context(81077), "artificial_other")
+
     def test_viruses_and_synthetic_nodes_are_not_forced_into_cellular_domains(self):
         self.assertEqual(self.taxonomy.assignment("50", "superkingdom")["context"], "viral")
         self.assertEqual(self.taxonomy.assignment("50", "superkingdom")["taxon_id"], "")

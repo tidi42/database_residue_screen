@@ -14,7 +14,7 @@ from .eligibility import event_eligibility
 from .example import save_json
 from .outcomes import logical_memberships, project_real_events
 from .panels import LOGICAL_SCHEMA
-from .policy import load_policy
+from .policy import applicability, load_policy
 from .reanalysis import read_events, write_completed_analysis
 from .search import STATUS_SCHEMA
 
@@ -122,7 +122,7 @@ class Taxonomy:
 
     def context(self, identifier: int) -> str:
         lineage = set(self.lineage(identifier))
-        for ancestor, label in ((32630, "synthetic"), (81077, "vector"), (10239, "viral"), (131567, "cellular"),
+        for ancestor, label in ((32630, "synthetic"), (29278, "vector"), (81077, "artificial_other"), (10239, "viral"), (131567, "cellular"),
                                 (2, "cellular"), (2157, "cellular"), (2759, "cellular")):
             if ancestor in lineage:
                 return label
@@ -245,7 +245,8 @@ def taxonomy_composition(real_events: list[dict], assignments: list[dict], group
             if decisions[row["accession_version"], population][0] != "included":
                 continue
             for endpoint in ("strict", "tolerant"):
-                if row[endpoint] == "yes":
+                if row[endpoint] == "yes" and ("detectability" not in policy or
+                        applicability(row["qlen"], endpoint, policy) == "operational_retained_search"):
                     populations[row["group"], endpoint, population].add(row["accession_version"])
                     populations["Global union", endpoint, population].add(row["accession_version"])
     rows = []
@@ -290,7 +291,7 @@ def annotate_taxonomy(analysis: Path, snapshot: Path, destination: Path, ranks: 
     contexts = {row["accession_version"]: row["context"] for row in assignments}
     for row in events:
         context = contexts.get(row["accession_version"], "unknown")
-        if context in {"synthetic", "vector"} and row["origin"] == "unknown":
+        if context in {"synthetic", "vector", "artificial_other"} and row["origin"] == "unknown":
             row["origin"] = context
         elif context in {"cellular", "viral", "conflicting"}:
             row["context"] = context if row["context"] in {"unknown", context} else "conflicting"

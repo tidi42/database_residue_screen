@@ -59,7 +59,12 @@
         "relative_stability_tolerance": {"type": "number", "exclusiveMinimum": 0, "maximum": 0.1},
         "traceback": {"const": "qseq_sseq_btop"},
         "completion_policy": {"const": "per_query_manifest_atomic_batches"},
-        "failure_policy": {"const": "retry_then_block_matched_parent"}
+        "failure_policy": {"enum": ["abort_run_resume_retries_failed_batches", "retry_then_block_matched_parent"]},
+        "threshold_mode": {"enum": ["adaptive", "fixed"]},
+        "maximum_evalue": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "informativeness_limit": {"type": "number", "exclusiveMinimum": 0},
+        "testable_chance_limit": {"type": "number", "exclusiveMinimum": 0},
+        "search_space": {"type": ["integer", "null"], "minimum": 1}
       }
     },
     "controls": {

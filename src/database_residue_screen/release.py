@@ -41,6 +41,18 @@ def validate_analysis(directory: Path, require_production: bool = False) -> dict
                 or complete["search_id"] != object_digest(request) or report["search_id"] != complete["search_id"]
                 or not complete["all_queries_completed"]):
             raise ContractError("Result provenance disagrees with the original search request")
+        if report.get("length_calibration"):
+            source = report.get("length_calibration_source") or dict(kind="runtime_request")
+            if source["kind"] == "runtime_request":
+                bound = request.get("length_calibration")
+            else:
+                from .testability_migration import validate_migration
+                migration = Path(source["path"])
+                if digest(migration) != source["sha256"]:
+                    raise ContractError("Testability migration changed since analysis")
+                bound = validate_migration(migration, search, request, complete)["length_calibration"]
+            if bound != report["length_calibration"]:
+                raise ContractError("Result testability calibration disagrees with its search or migration")
     elif require_production:
         raise ContractError("Production result has no original search evidence")
     if require_production:
@@ -58,6 +70,8 @@ def validate_analysis(directory: Path, require_production: bool = False) -> dict
     policy = load_policy(directory / "analysis_policy.json")
     if policy != report["analysis_policy"]:
         raise ContractError("Result policy disagrees with its manifest")
+    if report.get("length_calibration") and policy.get("detectability") != report["length_calibration"]["lengths"]:
+        raise ContractError("Result policy testability rows disagree with the recorded calibration")
     events = read_events(directory, report)
     logical = read_table(directory / "logical_queries.tsv", LOGICAL_SCHEMA)
     statuses = read_table(directory / "search_status.tsv", STATUS_SCHEMA)
@@ -70,6 +84,14 @@ def validate_analysis(directory: Path, require_production: bool = False) -> dict
     if report["result_contract"] == "reference_screen_v1":
         outcomes, contrasts = historical_v1_results(outcomes, report["draws_per_parent"], report["repeated_control_seed_values"])
         outcome_schema, contrast_schema = OUTCOME_V1_SCHEMA, CONTRAST_V1_SCHEMA
+    from .sensitivity import (COMMON_RULE_SCHEMA, SENSITIVITY_SCHEMA, TESTABILITY_SCHEMA, common_rule_rows, length_sensitivity,
+                              length_testability_rows)
+    if "length_sensitivity.tsv" in names and read_table(directory / "length_sensitivity.tsv", SENSITIVITY_SCHEMA) != length_sensitivity(outcomes, policy, report["draws_per_parent"]):
+        raise ContractError("Length sensitivity disagrees with recomputed matched cohorts")
+    if "common_rule_contrasts.tsv" in names and read_table(directory / "common_rule_contrasts.tsv", COMMON_RULE_SCHEMA) != common_rule_rows(outcomes, policy, report["draws_per_parent"]):
+        raise ContractError("Common strict/tolerant contrasts disagree with recomputed matched cohorts")
+    if "length_testability.tsv" in names and read_table(directory / "length_testability.tsv", TESTABILITY_SCHEMA) != length_testability_rows(policy):
+        raise ContractError("Per-length testability table disagrees with the analysis policy")
     real_events = project_real_events(events, memberships)
     for name, rows, definition in (("outcomes.tsv", outcomes, outcome_schema), ("contrasts.tsv", contrasts, contrast_schema),
                                    ("event_memberships.tsv", memberships, MEMBERSHIP_SCHEMA), ("eligibility.tsv", eligibility, ELIGIBILITY_SCHEMA),
@@ -133,6 +155,7 @@ def export_figure_inputs(analysis: Path, destination: Path) -> dict:
     if source["result_contract"] != "reference_screen_v2":
         raise ContractError("New figure inputs require explicit v2 re-derivation of historical v1 evidence")
     tables = ["outcomes.tsv", "contrasts.tsv", "eligibility.tsv"]
+    tables += [name for name in ("length_sensitivity.tsv", "common_rule_contrasts.tsv", "length_testability.tsv") if name in source["files"]]
     tables += [population + "_" + suffix for population in source["analysis_policy"]["record_populations"]
                for suffix in ("density.tsv", "positions.tsv", "overlap.tsv")]
     if "taxonomy_snapshot" in source:

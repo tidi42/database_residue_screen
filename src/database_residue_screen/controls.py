@@ -24,7 +24,7 @@ PARENT_SCHEMA = dict(type="object", additionalProperties=False, properties={
     "parent_id": {"type": "string"}, "physical_ids_json": {"type": "string"},
     "length": {"type": "integer"}, "draws": {"type": "integer"},
     "distinct_sequences": {"type": "integer"}, "distinct_canonical_sequences": {"type": "integer"},
-    "parent_identical_draws": {"type": "integer"},
+    "parent_identical_draws": {"type": "integer"}, "null_space_status": {"type": "string"},
 })
 
 
@@ -101,7 +101,7 @@ def generate_controls(query_fasta: Path, destination: Path, draws: int, seed: in
         parent_rows.append(dict(parent_id=parent_id, physical_ids_json=json.dumps(sorted(aliases[parent_id])), length=len(sequence),
                                 draws=draws, distinct_sequences=len(set(parent_draws)),
                                 distinct_canonical_sequences=len({canonical(draw) for draw in parent_draws}),
-                                parent_identical_draws=parent_draws.count(sequence)))
+                                parent_identical_draws=parent_draws.count(sequence), null_space_status=null_space_status(sequence)))
     destination.mkdir(parents=True, exist_ok=False)
     save_fasta(destination / "controls.fasta", sequences)
     write_table(destination / "draws.tsv", draw_rows, DRAW_SCHEMA)
@@ -116,3 +116,32 @@ def generate_controls(query_fasta: Path, destination: Path, draws: int, seed: in
                   files={name: digest(destination / name) for name in ("controls.fasta", "draws.tsv", "parents.tsv")})
     save_json(destination / "control_qc.json", report)
     return report
+
+def null_space_status(sequence: str, budget: int = 100000) -> str:
+    """Enumerate distinct Euler-trail spellings only until two are found.
+
+    Edge copies are indistinguishable. Return a proof of singleton only after
+    exhausting the search. Budget exhaustion is explicitly unknown.
+    """
+    if not sequence or set(sequence) - set("ACGT"):
+        raise ContractError("Null-space diagnostic requires ACGT")
+    if len(sequence) > 256:
+        return "not_enumerated_length_budget"
+    edges = dinucleotides(sequence)
+    found, visited = 0, 0
+    def visit(prefix):
+        nonlocal found, visited
+        visited += 1
+        if visited > budget or found >= 2:
+            return
+        if len(prefix) == len(sequence):
+            found += int(prefix[-1] == sequence[-1])
+            return
+        for base in "ACGT":
+            edge = prefix[-1] + base
+            if edges[edge]:
+                edges[edge] -= 1
+                visit(prefix + base)
+                edges[edge] += 1
+    visit(sequence[0])
+    return "multiple_sequences_proven" if found >= 2 else "not_enumerated_search_budget" if visited > budget else "proven_singleton_null"

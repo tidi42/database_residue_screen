@@ -10,7 +10,7 @@ from .legacy import REAL_BLAST_FILES
 from .matching import parse_legacy_hsp, strict_hsp, tolerant_hsp
 from .panels import LOGICAL_SCHEMA
 from .outcomes import CONTRAST_SCHEMA, ELIGIBILITY_SCHEMA, MEMBERSHIP_SCHEMA, OUTCOME_SCHEMA, build_outcomes, project_real_events
-from .policy import load_policy
+from .policy import applicability, load_policy
 from .search import STATUS_SCHEMA, iter_hsps, object_digest, validate_completed_batch
 from .sequences import accession_version, canonical, canonical_id, read_fasta
 
@@ -68,6 +68,11 @@ def position_summary(events: list[dict], group: str, window: int, minimum_length
 
 
 def derive_event_tables(events: list[dict], groups: list[str], destination: Path, prefix: str = "", policy: dict | None = None) -> dict:
+    # These tables summarise strict support. Keep the complete retained inventory
+    # in events.tsv/real_events.tsv, but apply the same a-priori gate as outcomes
+    # before building primary event, accession and positional summaries.
+    if policy and "detectability" in policy:
+        events = [row for row in events if applicability(row["qlen"], "strict", policy) == "operational_retained_search"]
     density, unique = Counter(), defaultdict(set)
     memberships = defaultdict(set)
     for row in events:
@@ -144,7 +149,7 @@ def reanalyse_legacy(root: Path, query_fasta: Path, query_metadata: Path, destin
     write_table(destination / "queries.tsv", list(query_rows.values()), QUERY_SCHEMA)
     write_table(destination / "quality.tsv", [dict(group=key[0], identity_bin=key[1], coverage_bin=key[2], hsp_rows=count)
                                                for key, count in sorted(quality.items())], QUALITY_SCHEMA)
-    groups = ["ONT", "Illumina", "BGI/DNBSEQ", "PacBio"]
+    groups = sorted({row["group"] for row in query_rows.values()})
     summaries = []
     for group in groups:
         selected = [row for row in query_rows.values() if row["group"] == group]
@@ -182,6 +187,12 @@ def write_completed_analysis(events: list[dict], logical: list[dict], statuses: 
     write_table(destination / "search_status.tsv", statuses, STATUS_SCHEMA)
     write_table(destination / "outcomes.tsv", outcomes, OUTCOME_SCHEMA)
     write_table(destination / "contrasts.tsv", contrasts, CONTRAST_SCHEMA)
+    from .sensitivity import (COMMON_RULE_SCHEMA, SENSITIVITY_SCHEMA, TESTABILITY_SCHEMA, common_rule_rows, length_sensitivity,
+                              length_testability_rows)
+    write_table(destination / "length_sensitivity.tsv", length_sensitivity(outcomes, policy, provenance["draws_per_parent"]), SENSITIVITY_SCHEMA)
+    write_table(destination / "common_rule_contrasts.tsv", common_rule_rows(outcomes, policy, provenance["draws_per_parent"]), COMMON_RULE_SCHEMA)
+    if policy.get("detectability"):
+        write_table(destination / "length_testability.tsv", length_testability_rows(policy), TESTABILITY_SCHEMA)
     write_table(destination / "event_memberships.tsv", memberships, MEMBERSHIP_SCHEMA)
     write_table(destination / "eligibility.tsv", eligibility, ELIGIBILITY_SCHEMA)
     save_json(destination / "analysis_policy.json", policy)
@@ -211,7 +222,7 @@ def write_completed_analysis(events: list[dict], logical: list[dict], statuses: 
     return report
 
 
-def analyse_search(panel: Path, search: Path, destination: Path) -> dict:
+def analyse_search(panel: Path, search: Path, destination: Path, calibration_migration: Path | None = None) -> dict:
     if (search / "quarantine.json").exists():
         raise ContractError("Search is quarantined; see its quarantine.json and do not use it for scientific results")
     definition = read_json(panel / "panel.json")
@@ -229,6 +240,25 @@ def analyse_search(panel: Path, search: Path, destination: Path) -> dict:
     if (request["queries_sha256"] != digest(panel / "search_queries.fasta") or complete["search_id"] != object_digest(request)
             or not complete["all_queries_completed"]):
         raise ContractError("Search does not completely cover this panel")
+    if request.get("study_binding"):
+        declared = request["study_binding"]["analysis"]
+        if (policy["position"]["windows"] != declared["position_windows"] or
+                policy["position"]["minimum_lengths"] != declared["minimum_record_lengths"]):
+            raise ContractError("Analysis policy disagrees with study.json position parameters")
+    if request.get("length_calibration"):
+        if calibration_migration is not None:
+            raise ContractError("Search already carries its runtime calibration; do not supply a migration")
+        calibration, calibration_source = request["length_calibration"], dict(kind="runtime_request")
+    elif calibration_migration is not None:
+        from .testability_migration import validate_migration
+        calibration = validate_migration(calibration_migration, search, request, complete)["length_calibration"]
+        calibration_source = dict(kind="post_hoc_fixed_threshold_migration", path=str(calibration_migration.resolve()),
+                                  sha256=digest(calibration_migration))
+    else:
+        raise ContractError("Search lacks length-aware calibration; supply a hash-bound migration from calibrate-search "
+                            "for a fixed-threshold historical search, or rerun")
+    policy = dict(policy, detectability=calibration["lengths"],
+                  sensitivity_baseline_evalue=policy.get("sensitivity_baseline_evalue", request["settings"]["evalue"]))
     events, statuses, seen_queries = [], [], set()
     for batch in complete["batches"]:
         directory = search / batch["directory"]
@@ -259,6 +289,7 @@ def analyse_search(panel: Path, search: Path, destination: Path) -> dict:
                       search_mode=request["mode"],
                       search_id=complete["search_id"], source_search=str(search.resolve()), draws_per_parent=definition["draws_per_parent"],
                       repeated_control_seed_values=definition["repeated_control_seed_values"], control_algorithm=definition["control_algorithm"],
-                      search_settings=request["settings"],
+                      search_settings=request["settings"], length_calibration=calibration,
+                      length_calibration_source=calibration_source, study_binding=request.get("study_binding"),
                       search_request_sha256=digest(search / "request.json"), database_acceptance=request.get("database_acceptance"))
     return write_completed_analysis(events, logical, statuses, policy, destination, provenance)

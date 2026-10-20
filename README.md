@@ -26,7 +26,7 @@ python -m venv .venv
 BLAST+ is optional for contract checks and required for database inspection,
 searches and integration tests. uShuffle is pinned to an exact upstream commit
 because the Python-compatible 1.1.3 build was not available from PyPI. Installing
-it requires a C compiler and build dependencies; its source and binary provenance
+it requires a C compiler, Python development headers (e.g. `python3-dev`) and build dependencies; its source and binary provenance
 are recorded with every generated control panel.
 Its executable version is recorded explicitly; an installed version is not
 assumed to match a previous analysis. The scientific Python environment and the
@@ -65,6 +65,7 @@ historical BLAST tables. Unauthenticated queries remain exploratory. Derived
 standalone components are reference queries, not newly authenticated molecules.
 Original FASTAs, BLAST files, historical results and manuscripts are untouched.
 
+Errors return exit code **1** (including a refused `freeze`); success returns **0**.
 `preflight` returns exit code **2** while a design is blocked and still writes
 the full report when `--output` is supplied. A well-structured report can validly
 say that a study is not ready; `validate-output` verifies the report, not the
@@ -157,3 +158,42 @@ volumes or historical analysis data. Those files are intentionally not included.
 See [docs/reanalysis.md](docs/reanalysis.md) for commands, output contracts and
 the distinction between synthetic evaluation, retained-data descriptions,
 completed exploratory searches, and final scientific acceptance.
+
+## v19 search and review amendment
+
+The default `search` keeps the production E-value fixed (E=10 unless declared
+otherwise). Runtime XML calibration computes retention and a-priori testability
+per length, rule and actual database size. Primary denominators contain only
+`testable` matched parents. `censored_untestable` and `chance_limited` have
+positive=-1 and separate attrition, never zero-filled denominators.
+
+The declared uniform-iid chance bound uses both strands and all qualifying spans
+(tolerant: a conservative union bound). Defaults: <=0.01 testable; (0.01,0.05]
+chance-limited; >0.05 or incomplete score retention untestable. Configure
+`--testable-chance-limit` and `--informativeness-limit` before analysis.
+`--threshold-mode adaptive` is an optional diagnostic producing chance-saturated
+output; it is OFF by default and never overrides testability exclusions.
+`--search-space` permits fixed, VecScreen-like E-value scaling across releases;
+actual database chance burden still changes and is always recomputed.
+See `length_sensitivity.tsv` for primary, full-inventory and baseline exact-score
+calibrated cohorts, including explicitly labelled historical zero-filled fractions;
+`length_testability.tsv` for per-length classes and their reasons; and
+`common_rule_contrasts.tsv` for strict/tolerant comparisons on parents eligible for
+both rules. A completed fixed-threshold search without runtime calibration is
+reanalysed through `calibrate-search` and `analyse-search --calibration-migration`,
+without repeating the search. `assess-precision` also writes the post hoc
+`conditional_contrasts.tsv`. This protocol amendment does not retrospectively
+validate historical production results or the panel-specific 1,288/836 denominators.
+
+Use `--study study.json` to validate/hash declared search parameters and check
+analysis position grids. The implemented failure policy is
+`abort_run_resume_retries_failed_batches`: resume retries failed/incomplete
+batches, and analysis requires a complete run. The old declaration
+`retry_then_block_matched_parent` is rejected when binding a search.
+
+See [v19 method details](docs/length-aware-search.md),
+[figure reconstruction specification](docs/figures-v19.md) and
+[construct audit limits](docs/construct-validity.md). Original study panels,
+publication drivers and result snapshots remain unavailable in this source tree;
+this amendment cannot establish a completed scientific production application.
+A pinned source-install environment is supplied in `requirements.lock`.

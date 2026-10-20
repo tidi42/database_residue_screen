@@ -2,6 +2,8 @@ include README.md LICENSE pyproject.toml
 recursive-include docs *.md
 recursive-include examples *.md
 recursive-include tests *.py
+recursive-include scripts *.py
+include requirements.lock
 recursive-include src/database_residue_screen/schemas *.json
 prune .local
 prune .venv

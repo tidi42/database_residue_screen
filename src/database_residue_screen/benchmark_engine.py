@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ElementTree
 from collections import Counter
 from pathlib import Path
 
-from .benchmark_calibration import (ACTUAL_LENGTHS, compile_length_adapter, effective_search_space,
+from .benchmark_calibration import (compile_length_adapter, effective_search_space,
                                     executable_identities, execute, xml_statistics)
 from .contracts import ContractError
 from .design import digest
@@ -43,13 +43,15 @@ def direct_search(query_file: Path, queries: dict, database: Path, destination: 
     return report
 
 
-def calibrate_direct(archive: Path, binary_directory: Path, destination: Path, bases: int, sequences: int) -> dict:
+def calibrate_direct(archive: Path, binary_directory: Path, destination: Path, bases: int, sequences: int, lengths: tuple[int, ...]) -> dict:
+    if not lengths or any(length < 4 for length in lengths):
+        raise ContractError("Calibration requires explicit query lengths >=4")
     destination.mkdir(parents=True, exist_ok=False)
     binaries = executable_identities(binary_directory)
     adapter = compile_length_adapter(archive, destination / "adapter")
     generator = random.Random(20260922)
-    queries = {f"length_{length}": "".join(generator.choices("ACGT", k=length)) for length in ACTUAL_LENGTHS}
-    queries.update({f"poly_{length}": "A" * length for length in (8, 10, 16, 24, 111)})
+    queries = {f"length_{length}": "".join(generator.choices("ACGT", k=length)) for length in sorted(set(lengths))}
+    queries.update({f"poly_{length}": "A" * length for length in sorted(set(lengths))})
     save_fasta(destination / "queries.fasta", queries)
     validations, parameter_rows = [], []
     library = destination / "adapter/length_adapter.so"
@@ -84,7 +86,7 @@ def calibrate_direct(archive: Path, binary_directory: Path, destination: Path, b
     reference = parameter_rows[0]
     if any(any(not math.isclose(row[field], reference[field], rel_tol=1e-10) for field in ("kappa", "lambda_value", "entropy")) for row in parameter_rows):
         raise ContractError("Per-query statistical parameters differ; length-only calibration is insufficient")
-    spaces = [effective_search_space(library, length, bases, sequences, reference) for length in ACTUAL_LENGTHS]
+    spaces = [effective_search_space(library, length, bases, sequences, reference) for length in sorted(set(lengths))]
     if max(row["exact_evalue"] for row in spaces) >= 1e12:
         raise ContractError("Predeclared diagnostic E-value fails to cover exact witnesses")
     report = dict(status="engine_validated_version_matched", route="direct_per_query_XML_and_format7", binaries=binaries, adapter=adapter,

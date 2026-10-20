@@ -10,6 +10,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      BLAST_USAGE_REPORT: "false"
     strategy:
       matrix:
         python-version: ['3.11', '3.12', '3.13']
@@ -18,8 +20,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Install pinned NCBI BLAST+ 2.17.0
+        shell: bash
+        run: |
+          curl --fail --retry 3 -LO 'https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/2.17.0/ncbi-blast-2.17.0+-x64-linux.tar.gz'
+          curl --fail --retry 3 -LO 'https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/2.17.0/ncbi-blast-2.17.0+-x64-linux.tar.gz.md5'
+          md5sum --check ncbi-blast-2.17.0+-x64-linux.tar.gz.md5
+          sha256sum ncbi-blast-2.17.0+-x64-linux.tar.gz
+          tar -xzf ncbi-blast-2.17.0+-x64-linux.tar.gz
+          echo "$PWD/ncbi-blast-2.17.0+/bin" >> "$GITHUB_PATH"
       - run: python -m pip install '.[test]'
-      - run: python -W error::ResourceWarning -m unittest discover -s tests -v
+      - run: blastn -version && makeblastdb -version
+      - name: Full suite (skips fail CI)
+        run: python scripts/test_no_skips.py
       - run: python -m build
       - run: residue-screen example .local/ci-example
       - run: residue-screen preflight .local/ci-example/study.json --output .local/ci-example/preflight

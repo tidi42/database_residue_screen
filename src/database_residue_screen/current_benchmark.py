@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from .benchmark_calibration import ACTUAL_LENGTHS, executable_identities, execute, xml_statistics
+from .benchmark_calibration import executable_identities, execute, xml_statistics
 from .benchmark_engine import direct_search
 from .benchmark_fixtures import make_panels
 from .benchmark_truth import independent_hsp_truth, precompute_truth
@@ -52,14 +52,19 @@ def prepare_benchmark(panel: Path, calibration: Path, destination: Path) -> dict
     logical = read_table(panel / "logical_queries.tsv", LOGICAL_SCHEMA)
     searched = read_fasta(panel / "search_queries.fasta")
     originals = {row["parent_id"]: searched[row["parent_id"]] for row in logical if row["role"] == "real"}
-    if len(originals) != 1288 or {len(sequence) for sequence in originals.values()} != set(ACTUAL_LENGTHS):
-        raise ContractError("Actual-reference fixture panel differs from the planned 1,288 parents and 27 lengths")
+    lengths = sorted({len(sequence) for sequence in originals.values()})
+    if not originals or not set(lengths) <= {row["query_length"] for row in calibrated["search_spaces"]}:
+        raise ContractError("Calibration does not cover this panel's query lengths")
+    dimensions = {(row["database_bases"], row["database_sequences"]) for row in calibrated["search_spaces"]}
+    if len(dimensions) != 1:
+        raise ContractError("Calibration mixes target database dimensions")
+    bases, sequences = next(iter(dimensions))
     shards, exceptions = make_panels(originals)
     destination.mkdir(parents=True, exist_ok=False)
     shutil.copytree(calibration, destination / "calibration")
     source_directory = Path(__file__).parent
     source_names = ("current_benchmark.py", "benchmark_fixtures.py", "benchmark_truth.py", "benchmark_calibration.py",
-                    "benchmark_engine.py", "matching.py", "search.py", "sequences.py", "contracts.py")
+                    "benchmark_engine.py", "matching.py", "search.py", "length_aware.py", "sequences.py", "contracts.py")
     (destination / "code").mkdir()
     for name in source_names:
         shutil.copyfile(source_directory / name, destination / "code" / name)
@@ -100,11 +105,12 @@ def prepare_benchmark(panel: Path, calibration: Path, destination: Path) -> dict
     specification = dict(version="current_benchmark_v2", seed=20260922, panel_sha256=digest(panel / "panel.json"),
                          panel_path=str(panel.resolve()), calibration_sha256=digest(destination / "calibration/calibration.json"),
                          binaries=calibrated["binaries"], source_code={name: digest(source_directory / name) for name in source_names},
-                         actual_lengths=list(ACTUAL_LENGTHS), original_parents=len(originals), boundary_templates=216,
+                         actual_lengths=lengths, original_parents=len(originals),
+                         boundary_templates=sum(len(shard["queries"]) for shard in shards if shard["panel"] == "B"),
                          negative_construction_attempts=100, internal_flank=100, terminal_flank=200,
                          maximum_workers=4, wall_seconds=14400, output_bytes=10 * 1024 ** 3, fixture_timeout_seconds=3600,
                          arms={arm: search_settings(2000, 1e12 if arm == "permissive_diagnostic" else 10) for arm in ARMS},
-                         production_database=dict(bases=1079005865156, sequences=130787235, build_date="2026-09-12"),
+                         production_database=dict(bases=bases, sequences=sequences),
                          truth_scope="Every query-subject pair within each fixed shard; independent of all BLAST output",
                          shards=shard_rows, query_subject_pairs=len(truth_rows), truth_frozen_before_search=True,
                          files={str(path.relative_to(destination)): digest(path) for path in destination.rglob("*") if path.is_file()})
@@ -267,14 +273,14 @@ def run_benchmark(destination: Path, workers: int = 4) -> dict:
     check_hashes(destination, specification["files"])
     check_hashes(Path(__file__).parent, specification["source_code"])
     report = dict(contract="current_benchmark_v2", status="complete", specification_sha256=digest(destination / "benchmark_specification.json"),
-                  current_version="2.17.0+", original_queries=1288, boundary_queries=216, independent_pair_universe=specification["query_subject_pairs"],
+                  current_version="2.17.0+", original_queries=specification["original_parents"], boundary_queries=specification["boundary_templates"], independent_pair_universe=specification["query_subject_pairs"],
                   arms=list(ARMS), completed_shards=len(specification["shards"]), complete_arms=len(completions),
                   truth_independent_of_output=True, predicate_disagreements=0, production_database_searches=0,
                   wall_seconds=time.monotonic() - started, workers=workers, diagnostic_evalue=1e12,
                   short_summary={str(length): dict(parents=len({row["parent_id"] for row in detectability if row["length"] == length}),
                                                        witnesses=sum(row["length"] == length for row in detectability),
                                                        calibrated_recovered=sum(row["production_calibrated_recovered"] for row in detectability if row["length"] == length),
-                                                       diagnostic_recovered=sum(row["permissive_diagnostic_recovered"] for row in detectability if row["length"] == length)) for length in (8, 10, 16)},
+                                                       diagnostic_recovered=sum(row["permissive_diagnostic_recovered"] for row in detectability if row["length"] == length)) for length in specification["actual_lengths"]},
                   scope="Independent software QA and statistical detectability, not biological validation or exhaustive core_nt recall",
                   final_freeze=False, files={str(path.relative_to(destination)): digest(path) for path in destination.rglob("*") if path.is_file()})
     save_json(destination / "benchmark.json", report)

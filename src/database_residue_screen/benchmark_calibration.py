@@ -17,7 +17,6 @@ from .sequences import reverse_complement
 
 NCBI_SOURCE_SHA256 = "502057a88e9990e34e62758be21ea474cc0ad68d6a63a2e37b2372af1e5ea147"
 NCBI_SOURCE_URL = "https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/2.17.0/ncbi-blast-2.17.0+-src.tar.gz"
-ACTUAL_LENGTHS = (8, 10, 16, 19, 20, 21, 22, 23, 24, 26, 28, 29, 32, 33, 34, 35, 37, 38, 42, 45, 47, 49, 50, 51, 53, 61, 111)
 
 
 def execute(command: list[str], timeout: int = 3600) -> dict:
@@ -121,13 +120,15 @@ def xml_statistics(path: Path) -> list[dict]:
     return rows
 
 
-def calibrate(archive: Path, binary_directory: Path, destination: Path, bases: int, sequences: int) -> dict:
+def calibrate(archive: Path, binary_directory: Path, destination: Path, bases: int, sequences: int, lengths: tuple[int, ...]) -> dict:
+    if not lengths or any(length < 4 for length in lengths):
+        raise ContractError("Calibration requires explicit query lengths >=4")
     destination.mkdir(parents=True, exist_ok=False)
     binaries = executable_identities(binary_directory)
     adapter = compile_length_adapter(archive, destination / "adapter")
     generator = random.Random(20260922)
-    queries = {f"length_{length}": "".join(generator.choices("ACGT", k=length)) for length in ACTUAL_LENGTHS}
-    queries.update({f"poly_{length}": "A" * length for length in (8, 10, 16, 24, 111)})
+    queries = {f"length_{length}": "".join(generator.choices("ACGT", k=length)) for length in sorted(set(lengths))}
+    queries.update({f"poly_{length}": "A" * length for length in sorted(set(lengths))})
     save_fasta(destination / "queries.fasta", queries)
     validations, parameter_rows = [], []
     library = destination / "adapter/length_adapter.so"
@@ -140,7 +141,7 @@ def calibrate(archive: Path, binary_directory: Path, destination: Path, bases: i
         build = execute([binaries["makeblastdb"]["path"], "-in", str(fixture / "subjects.fasta"), "-dbtype", "nucl", "-parse_seqids", "-out", str(fixture / "database")])
         save_json(fixture / "database_build.json", build)
         tabular, stats = [], []
-        for length in ACTUAL_LENGTHS:
+        for length in sorted(set(lengths)):
             same_length = {name: sequence for name, sequence in queries.items() if len(sequence) == length}
             query_file = fixture / f"queries_{length}.fasta"
             search = fixture / f"search_{length}"
@@ -176,7 +177,7 @@ def calibrate(archive: Path, binary_directory: Path, destination: Path, bases: i
     reference = parameter_rows[0]
     if any(any(not math.isclose(row[field], reference[field], rel_tol=1e-10) for field in ("kappa", "lambda_value", "entropy")) for row in parameter_rows):
         raise ContractError("Query-specific statistical parameters differ; per-length calibration is insufficient")
-    spaces = [effective_search_space(library, length, bases, sequences, reference) for length in ACTUAL_LENGTHS]
+    spaces = [effective_search_space(library, length, bases, sequences, reference) for length in sorted(set(lengths))]
     if max(row["exact_evalue"] for row in spaces) >= 1e12:
         raise ContractError("Predeclared diagnostic E-value does not cover exact query witnesses")
     report = dict(status="engine_validated_version_matched", binaries=binaries, adapter=adapter,

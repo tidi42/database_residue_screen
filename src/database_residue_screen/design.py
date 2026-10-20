@@ -77,6 +77,8 @@ def check_design(study_path: Path) -> dict:
         add("UNEQUAL_RETRIEVAL", "Real and control target limits must be identical")
     if search["retention_ladder"] != sorted(search["retention_ladder"]) or search["real_target_limit"] not in search["retention_ladder"]:
         add("RETENTION_DESIGN", "An increasing retention ladder must include the starting target limit")
+    if search["failure_policy"] != "abort_run_resume_retries_failed_batches":
+        add("FAILURE_POLICY_UNIMPLEMENTED", "Runner aborts and retries on resume; selective matched-parent failure blocking is not implemented", severity="warning")
     controls = study["controls"]
     if not controls["algorithm_version"]:
         add("NULL_VERSION", "Pin the verified shuffle implementation version before freezing")
