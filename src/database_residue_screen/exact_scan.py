@@ -8,6 +8,12 @@ BLAST seeds, E-values or target caps. Ambiguity codes never match. Per-volume
 record and base totals must sum to the database dimensions in the hashed
 database evidence, otherwise the scan is not accepted.
 
+The unit is the database record (OID), as in BLAST. blastdbcmd prints one line
+per defline, so an OID with merged deflines (identical sequences of several
+accessions) appears on consecutive lines; it is scanned and counted once and
+reported under its first accession, which is the subject id BLAST reports. The
+further accessions are listed as aliases.
+
 Each volume is finished atomically: its occurrence table is written under a
 temporary name and renamed, then a completion record with totals and the table
 hash is renamed into place. A scan that was interrupted can be resumed into the
@@ -26,9 +32,10 @@ from .contracts import ContractError, read_json, table_schema, write_table
 from .design import digest
 from .sequences import read_fasta
 
-OCCURRENCE_SCHEMA = table_schema(("query_id", "accession_version", "strand", "volume"), ("start", "end", "record_length", "query_length"))
+OCCURRENCE_SCHEMA = table_schema(("query_id", "accession_version", "alias_accessions", "strand", "volume"),
+                                 ("oid", "start", "end", "record_length", "query_length"))
 COMPLEMENT = str.maketrans("ACGT", "TGCA")
-SCAN_FORMAT = "%a %s"
+SCAN_FORMAT = "%o %a %s"
 
 
 def reverse_complement(sequence: str) -> str:
@@ -60,21 +67,41 @@ def automaton(patterns: dict[str, list[tuple[str, str]]]):
     return machine
 
 
+def _record_rows(record: list, volume: str) -> list[dict]:
+    oid, accession, sequence, aliases, hits = record
+    alias_text = ";".join(aliases)
+    return [dict(query_id=name, accession_version=accession, alias_accessions=alias_text, oid=oid, strand=strand, volume=volume,
+                 start=end - length + 2, end=end + 1, record_length=len(sequence), query_length=length) for end, length, name, strand in hits]
+
+
 def scan_lines(lines, machine, volume: str):
-    """Yield occurrence rows and finally a (records, bases) total from 'accession sequence' lines."""
-    records = bases = 0
+    """Yield occurrence rows and finally a (records, bases, deflines) total from 'oid accession sequence' lines (one per defline)."""
+    records = bases = deflines = 0
+    record = None
     for line in lines:
-        accession, _, sequence = line.rstrip("\n").partition(" ")
-        if not accession or not sequence:
+        deflines += 1
+        oid_text, _, rest = line.rstrip("\n").partition(" ")
+        accession, _, sequence = rest.partition(" ")
+        if not oid_text.isdigit() or not accession or not sequence:
             raise ContractError("Malformed blastdbcmd record line in " + volume)
-        sequence = sequence.upper()
+        oid, sequence = int(oid_text), sequence.upper()
+        if record is not None and oid == record[0]:
+            if sequence != record[2]:
+                raise ContractError(f"Deflines of OID {oid} in {volume} carry different sequences")
+            if accession != record[1] and accession not in record[3]:
+                record[3].append(accession)
+            continue
+        if record is not None:
+            if oid < record[0]:
+                raise ContractError("blastdbcmd OIDs are not ascending in " + volume)
+            yield from _record_rows(record, volume)
+        hits = [(end, length, name, strand) for end, (length, owners) in machine.iter(sequence) for name, strand in owners]
+        record = [oid, accession, sequence, [], hits]
         records += 1
         bases += len(sequence)
-        for end, (length, owners) in machine.iter(sequence):
-            for name, strand in owners:
-                yield dict(query_id=name, accession_version=accession, strand=strand, volume=volume, start=end - length + 2,
-                           end=end + 1, record_length=len(sequence), query_length=length)
-    yield records, bases
+    if record is not None:
+        yield from _record_rows(record, volume)
+    yield records, bases, deflines
 
 
 def scan_volume(job: tuple) -> dict:
@@ -98,7 +125,8 @@ def scan_volume(job: tuple) -> dict:
     partial = output.with_name(output.name + ".partial")
     write_table(partial, rows, OCCURRENCE_SCHEMA)
     os.replace(partial, output)
-    record = dict(volume=volume, records=totals[0], bases=totals[1], occurrences=len(rows), file=output.name, sha256=digest(output))
+    record = dict(volume=volume, records=totals[0], bases=totals[1], deflines=totals[2], occurrences=len(rows), file=output.name,
+                  sha256=digest(output))
     pending = Path(destination) / f"{volume}.complete.json.partial"
     pending.write_text(json.dumps(record, indent=1) + "\n", encoding="utf-8")
     os.replace(pending, Path(destination) / f"{volume}.complete.json")
@@ -158,9 +186,12 @@ def run_exact_scan(queries_fasta: Path, database_prefix: Path, evidence: Path, d
                   scanned_queries=len({name for owners in patterns.values() for name, _ in owners}),
                   patterns=len(patterns), records=records, bases=bases, expected_records=runtime["sequence_count"],
                   expected_bases=runtime["base_count"], totals_match_database=accepted,
+                  deflines=sum(row["deflines"] for row in volumes),
                   occurrences=sum(row["occurrences"] for row in volumes), volumes=volumes, code_sha256=digest(Path(__file__)),
                   request_sha256=digest(destination / "scan_request.json"), reused_volumes=sorted(record["volume"] for record in reused.values() if record),
-                  interpretation="All exact occurrences on both strands; independent of BLAST seeds, E-values and target caps")
+                  interpretation="All exact occurrences on both strands; independent of BLAST seeds, E-values and target caps. "
+                                 "Records are database OIDs reported under their first accession (the BLAST subject id); "
+                                 "merged-defline accessions are listed as aliases")
     (destination / "scan.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
     if not accepted:
         raise ContractError("Scanned records/bases differ from the database evidence; the scan is not accepted")
@@ -176,5 +207,5 @@ def read_occurrences(scan: Path) -> list[dict]:
             raise ContractError("Exact scan output changed: " + volume["file"])
         with path.open(newline="", encoding="utf-8") as handle:
             for row in csv.DictReader(handle, delimiter="\t"):
-                rows.append(dict(row, **{key: int(row[key]) for key in ("start", "end", "record_length", "query_length")}))
+                rows.append(dict(row, **{key: int(row[key]) for key in ("oid", "start", "end", "record_length", "query_length")}))
     return rows
