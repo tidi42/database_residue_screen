@@ -72,6 +72,16 @@ class AnnotatedSearchIntegrationTests(unittest.TestCase):
                 cached = fetch_metadata(root / "analysis", root / "cached_metadata", reuse_metadata=root / "metadata")
             self.assertEqual(cached["matched_exact_version_records"], len(requested))
             self.assertEqual(cached["reused_metadata"]["matching_records"], len(requested))
+            # A hash-verified chained cache may be reused; a changed upstream response may not.
+            with patch("database_residue_screen.metadata.urlopen", side_effect=AssertionError("Chained cache must not fetch")):
+                chained = fetch_metadata(root / "analysis", root / "chained_metadata", reuse_metadata=root / "cached_metadata")
+            self.assertEqual(chained["matched_exact_version_records"], len(requested))
+            upstream = next((root / "metadata").glob("esummary_*.json"))
+            original = upstream.read_bytes()
+            upstream.write_bytes(original + b" ")
+            with self.assertRaises(ContractError):
+                fetch_metadata(root / "analysis", root / "tampered_chain", reuse_metadata=root / "cached_metadata")
+            upstream.write_bytes(original)
             annotate_events(root / "analysis", root / "cached_metadata", root / "cached_annotated")
             self.assertTrue(validate_analysis(root / "cached_annotated")["valid"])
             result = annotate_events(root / "analysis", root / "metadata", root / "annotated")

@@ -67,6 +67,28 @@ def summary_with_retry(request, attempts=3):
             time.sleep(0.4 * 2**(attempt - 1))
 
 
+def verify_metadata_archive(directory: Path, depth: int = 0) -> dict:
+    """Verify an archive and, for a chained cache, every upstream link by hash (bounded depth)."""
+    evidence = read_json(directory / "metadata.json")
+    if (evidence.get("record_contract") != "explicit_molecule_v1" or
+            digest(directory / "subjects.tsv") != evidence["subject_table_sha256"]):
+        raise ContractError("Cached metadata contract or subject table changed")
+    for batch in evidence["batches"]:
+        if Path(batch["file"]).name != batch["file"] or digest(directory / batch["file"]) != batch["sha256"]:
+            raise ContractError("Cached metadata response changed")
+        if batch.get("reused_from") and digest(Path(batch["reused_from"])) != batch["sha256"]:
+            raise ContractError("Upstream cached metadata response changed: " + batch["reused_from"])
+    upstream = evidence.get("reused_metadata")
+    if upstream is not None:
+        if depth >= 5:
+            raise ContractError("Metadata cache chain is too deep")
+        source = Path(upstream["directory"])
+        if digest(source / "metadata.json") != upstream["manifest_sha256"]:
+            raise ContractError("Upstream metadata manifest changed")
+        verify_metadata_archive(source, depth + 1)
+    return evidence
+
+
 def fetch_metadata(analysis: Path, destination: Path, batch_size: int = 100, reuse_metadata: Path | None = None) -> dict:
     if not 1 <= batch_size <= 100:
         raise ContractError("Metadata batches must contain 1 to 100 accessions")
@@ -88,15 +110,8 @@ def fetch_metadata(analysis: Path, destination: Path, batch_size: int = 100, reu
     rows, problems, batches = {}, [], []
     reused = None
     if reuse_metadata is not None:
-        evidence = read_json(reuse_metadata / "metadata.json")
-        if (evidence.get("record_contract") != "explicit_molecule_v1" or
-                digest(reuse_metadata / "subjects.tsv") != evidence["subject_table_sha256"]):
-            raise ContractError("Cached metadata contract or subject table changed")
-        if evidence.get("reused_metadata") is not None:
-            raise ContractError("Use an original metadata archive, not a chained cache")
+        evidence = verify_metadata_archive(reuse_metadata)
         for index, batch in enumerate(evidence["batches"], 1):
-            if Path(batch["file"]).name != batch["file"] or digest(reuse_metadata / batch["file"]) != batch["sha256"]:
-                raise ContractError("Cached metadata response changed")
             target = destination / f"cached_esummary_{index:04d}.json"
             shutil.copyfile(reuse_metadata / batch["file"], target)
             batches.append(dict(batch, file=target.name, reused_from=str((reuse_metadata / batch["file"]).resolve())))
