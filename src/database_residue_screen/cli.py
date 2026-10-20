@@ -155,6 +155,11 @@ def parser() -> argparse.ArgumentParser:
     positional.add_argument("--metadata", type=Path, required=True, help="Archived ESummary directory (projectid field)")
     positional.add_argument("--insdc", type=Path, help="fetch-insdc output directory")
     positional.add_argument("--output", type=Path, required=True, help="TSV output path")
+    caps = subcommands.add_parser("cap-review", help="Weakest retained subject score versus minimum qualifying scores for every "
+                                  "cap-saturated query of a completed search")
+    caps.add_argument("search", type=Path)
+    caps.add_argument("--exact-scan", type=Path, help="exact-scan output for cap-free strict counts")
+    caps.add_argument("--output", type=Path, required=True, help="TSV output path")
     census = subcommands.add_parser("flank-census", help="Descriptive flank classes of retained strict hits for declared families; "
                                     "integrity-checked local retrieval, no new search")
     census.add_argument("analysis", type=Path)
@@ -314,6 +319,18 @@ def main(arguments: list[str] | None = None) -> int:
                                           read_annotation(args.insdc) if args.insdc else None)
             _write_table(args.output, rows, SENSITIVITY_SCHEMA)
             result = dict(rows=len(rows), output=str(args.output))
+        elif args.command == "cap-review":
+            from .cap_review import REVIEW_SCHEMA, review_saturated
+            from .contracts import write_table as _write_table
+            exact = None
+            if args.exact_scan:
+                from .exact_scan import read_occurrences
+                exact = {}
+                for row in read_occurrences(args.exact_scan):
+                    exact.setdefault(row["query_id"], set()).add(row["accession_version"])
+            rows = review_saturated(args.search, exact)
+            _write_table(args.output, rows, REVIEW_SCHEMA)
+            result = dict(saturated_queries=len(rows), statuses=dict(Counter((r["strict_status"], r["tolerant_status"]) for r in rows).most_common()))
         elif args.command == "flank-census":
             import shutil as _shutil
             from .census import run_census
