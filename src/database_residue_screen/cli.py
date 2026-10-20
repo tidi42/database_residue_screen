@@ -180,6 +180,7 @@ def parser() -> argparse.ArgumentParser:
     scan.add_argument("--blastdbcmd", default="blastdbcmd")
     scan.add_argument("--workers", type=int, default=8)
     scan.add_argument("--minimum-length", type=int, default=23)
+    scan.add_argument("--resume", action="store_true", help="Continue an interrupted scan with an identical frozen request")
     bundle = subcommands.add_parser("assemble-bundle", help="One analysable search from a migrated historical search and new calibrated "
                                     "searches; verified projections, nothing re-run")
     bundle.add_argument("panel", type=Path, help="Bundle panel whose search_queries.fasta all sources together cover")
@@ -349,8 +350,8 @@ def main(arguments: list[str] | None = None) -> int:
             if binary is None:
                 raise ContractError("blastdbcmd is unavailable: " + args.blastdbcmd)
             report = run_exact_scan(args.queries, args.database, args.evidence, args.output, str(Path(binary).resolve()),
-                                    args.workers, args.minimum_length)
-            result = {key: report[key] for key in ("scanned_queries", "records", "bases", "totals_match_database", "occurrences")}
+                                    args.workers, args.minimum_length, args.resume)
+            result = {key: report[key] for key in ("scanned_queries", "records", "bases", "totals_match_database", "occurrences", "reused_volumes")}
         elif args.command == "assemble-bundle":
             from .bundle import assemble_bundle
             report = assemble_bundle(args.panel, args.historical, args.migration, args.new_search, args.output, args.protocol)

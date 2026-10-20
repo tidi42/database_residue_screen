@@ -7,9 +7,16 @@ is an independent second implementation of the strict endpoint: it does not use
 BLAST seeds, E-values or target caps. Ambiguity codes never match. Per-volume
 record and base totals must sum to the database dimensions in the hashed
 database evidence, otherwise the scan is not accepted.
+
+Each volume is finished atomically: its occurrence table is written under a
+temporary name and renamed, then a completion record with totals and the table
+hash is renamed into place. A scan that was interrupted can be resumed into the
+same directory only with an identical frozen request; completed volumes are
+reused after hash verification and unfinished volumes are scanned again.
 """
 import csv
 import json
+import os
 import subprocess
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
@@ -88,12 +95,28 @@ def scan_volume(job: tuple) -> dict:
     if process.wait() != 0 or totals is None:
         raise ContractError(f"blastdbcmd failed for {volume}: {stderr.strip()}")
     rows.sort(key=lambda row: (row["query_id"], row["accession_version"], row["start"], row["strand"]))
-    write_table(output, rows, OCCURRENCE_SCHEMA)
-    return dict(volume=volume, records=totals[0], bases=totals[1], occurrences=len(rows), file=output.name, sha256=digest(output))
+    partial = output.with_name(output.name + ".partial")
+    write_table(partial, rows, OCCURRENCE_SCHEMA)
+    os.replace(partial, output)
+    record = dict(volume=volume, records=totals[0], bases=totals[1], occurrences=len(rows), file=output.name, sha256=digest(output))
+    pending = Path(destination) / f"{volume}.complete.json.partial"
+    pending.write_text(json.dumps(record, indent=1) + "\n", encoding="utf-8")
+    os.replace(pending, Path(destination) / f"{volume}.complete.json")
+    return record
+
+
+def completed_volume(destination: Path, volume: str) -> dict | None:
+    path = destination / f"{Path(volume).name}.complete.json"
+    if not path.is_file():
+        return None
+    record = read_json(path)
+    if record["volume"] != Path(volume).name or digest(destination / record["file"]) != record["sha256"]:
+        raise ContractError("Completed exact-scan volume changed: " + record["volume"])
+    return record
 
 
 def run_exact_scan(queries_fasta: Path, database_prefix: Path, evidence: Path, destination: Path, blastdbcmd: str,
-                   workers: int = 8, minimum_length: int = 23) -> dict:
+                   workers: int = 8, minimum_length: int = 23, resume: bool = False) -> dict:
     if workers < 1 or minimum_length < 1:
         raise ContractError("Exact scan needs positive workers and minimum length")
     runtime = read_json(evidence)["runtime_metadata"]
@@ -101,12 +124,32 @@ def run_exact_scan(queries_fasta: Path, database_prefix: Path, evidence: Path, d
     patterns = scan_patterns(queries, minimum_length)
     if not patterns:
         raise ContractError("No query reaches the declared minimum scan length")
-    destination.mkdir(parents=True, exist_ok=False)
+    request = dict(kind="exact_occurrence_scan_request_v1", queries_sha256=digest(queries_fasta), database_prefix=str(database_prefix),
+                   evidence_sha256=digest(evidence), blastdbcmd=blastdbcmd, blastdbcmd_sha256=digest(Path(blastdbcmd)),
+                   minimum_length=minimum_length, patterns=len(patterns), volume_names=list(runtime["volume_names"]),
+                   code_sha256=digest(Path(__file__)))
+    if destination.exists():
+        if not resume:
+            raise ContractError("Exact-scan output exists; use a new directory or resume an identical request")
+        if not (destination / "scan_request.json").is_file() or read_json(destination / "scan_request.json") != request:
+            raise ContractError("Exact-scan resume requires an identical frozen request")
+        if (destination / "scan.json").exists():
+            raise ContractError("Exact scan is already complete")
+        for leftover in destination.glob("*.partial"):
+            leftover.unlink()
+    else:
+        destination.mkdir(parents=True, exist_ok=False)
+        (destination / "scan_request.json").write_text(json.dumps(request, indent=1) + "\n", encoding="utf-8")
     directory = database_prefix.parent
-    jobs = [(blastdbcmd, str(directory / name), patterns, str(destination)) for name in runtime["volume_names"]]
+    reused = {name: completed_volume(destination, name) for name in runtime["volume_names"]}
+    for name, record in reused.items():
+        if record is None and (destination / f"{Path(name).name}.occurrences.tsv").exists():
+            (destination / f"{Path(name).name}.occurrences.tsv").unlink()
+    jobs = [(blastdbcmd, str(directory / name), patterns, str(destination)) for name in runtime["volume_names"] if reused[name] is None]
     started = datetime.now(timezone.utc).isoformat()
     with ProcessPoolExecutor(workers) as pool:
-        volumes = sorted(pool.map(scan_volume, jobs), key=lambda row: row["volume"])
+        scanned = list(pool.map(scan_volume, jobs))
+    volumes = sorted(scanned + [record for record in reused.values() if record is not None], key=lambda row: row["volume"])
     records, bases = sum(row["records"] for row in volumes), sum(row["bases"] for row in volumes)
     accepted = records == runtime["sequence_count"] and bases == runtime["base_count"]
     report = dict(kind="exact_occurrence_scan_v1", started_utc=started, completed_utc=datetime.now(timezone.utc).isoformat(),
@@ -116,6 +159,7 @@ def run_exact_scan(queries_fasta: Path, database_prefix: Path, evidence: Path, d
                   patterns=len(patterns), records=records, bases=bases, expected_records=runtime["sequence_count"],
                   expected_bases=runtime["base_count"], totals_match_database=accepted,
                   occurrences=sum(row["occurrences"] for row in volumes), volumes=volumes, code_sha256=digest(Path(__file__)),
+                  request_sha256=digest(destination / "scan_request.json"), reused_volumes=sorted(record["volume"] for record in reused.values() if record),
                   interpretation="All exact occurrences on both strands; independent of BLAST seeds, E-values and target caps")
     (destination / "scan.json").write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
     if not accepted:

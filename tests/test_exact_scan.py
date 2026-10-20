@@ -67,6 +67,49 @@ class ExactScanTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             scan_patterns({"bad": "ACGTN" * 6}, 23)
 
+    def test_interrupted_scan_resumes_only_with_identical_request(self):
+        from database_residue_screen.database import inspect_database
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            save_fasta(root / "a.fa", {"VOLA0001.1": "C" * 10 + OUTER + "G" * 10})
+            save_fasta(root / "b.fa", {"VOLB0001.1": "T" * 5 + reverse_complement(OTHER), "VOLB0002.1": "A" * 40})
+            for name in ("a", "b"):
+                subprocess.run(["makeblastdb", "-in", str(root / f"{name}.fa"), "-out", str(root / name), "-dbtype", "nucl", "-parse_seqids"],
+                               check=True, capture_output=True)
+            subprocess.run(["blastdb_aliastool", "-dblist", f"{root / 'a'} {root / 'b'}", "-dbtype", "nucl", "-out", str(root / "db"),
+                            "-title", "two volumes"], check=True, capture_output=True)
+            inspect_database(root / "db", root / "evidence")
+            evidence = root / "evidence/database_identity.json"
+            volumes = read_json(evidence)["runtime_metadata"]["volume_names"]
+            self.assertEqual(len(volumes), 2)
+            save_fasta(root / "q.fa", {"outer": OUTER, "inner": INNER, "other": OTHER})
+            blastdbcmd = shutil.which("blastdbcmd")
+            first = run_exact_scan(root / "q.fa", root / "db", evidence, root / "scan", blastdbcmd, workers=1)
+            self.assertEqual(first["reused_volumes"], [])
+            expected = sorted(map(str, read_occurrences(root / "scan")))
+            with self.assertRaises(ContractError):
+                run_exact_scan(root / "q.fa", root / "db", evidence, root / "scan", blastdbcmd, workers=1)
+            with self.assertRaises(ContractError):
+                run_exact_scan(root / "q.fa", root / "db", evidence, root / "scan", blastdbcmd, workers=1, resume=True)
+            # Simulate an interruption after the first volume: no final report, second volume unfinished, stray partial file.
+            (root / "scan/scan.json").unlink()
+            second = Path(volumes[1]).name
+            (root / f"scan/{second}.complete.json").unlink()
+            (root / f"scan/{second}.occurrences.tsv.partial").write_text("truncated")
+            with self.assertRaises(ContractError):
+                run_exact_scan(root / "q.fa", root / "db", evidence, root / "scan", blastdbcmd, workers=1, minimum_length=30, resume=True)
+            resumed = run_exact_scan(root / "q.fa", root / "db", evidence, root / "scan", blastdbcmd, workers=1, resume=True)
+            self.assertEqual(resumed["reused_volumes"], [Path(volumes[0]).name])
+            self.assertTrue(resumed["totals_match_database"])
+            self.assertEqual(sorted(map(str, read_occurrences(root / "scan"))), expected)
+            self.assertEqual(list((root / "scan").glob("*.partial")), [])
+            # A changed completed volume is never reused.
+            (root / "scan/scan.json").unlink()
+            reused = root / f"scan/{Path(volumes[0]).name}.occurrences.tsv"
+            reused.write_text(reused.read_text() + "\n")
+            with self.assertRaises(ContractError):
+                run_exact_scan(root / "q.fa", root / "db", evidence, root / "scan", blastdbcmd, workers=1, resume=True)
+
 
 if __name__ == "__main__":
     unittest.main()
