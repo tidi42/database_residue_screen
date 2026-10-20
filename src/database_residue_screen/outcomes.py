@@ -3,24 +3,27 @@ from collections import Counter, defaultdict
 
 from .contracts import ContractError, table_schema
 from .eligibility import event_eligibility
-from .policy import applicability, validate_policy
+from .policy import applicability, condition_role, validate_policy
 
 
 OUTCOME_SCHEMA = table_schema(("logical_id", "role", "parent_id", "sequence_id", "group", "condition", "endpoint", "population",
-                               "applicability", "completion", "resolution", "detection_resolution", "breadth_resolution", "retrieval", "null_state"),
+                               "applicability", "completion", "resolution", "detection_resolution", "breadth_resolution", "retrieval", "null_state",
+                               "panel_version", "condition_role"),
                               ("draw_index", "length", "seed", "retained_accessions", "positive", "unresolved_subjects", "excluded_subjects"))
 MEASURES = ("real_detection_rate", "parent_weighted_control_rate", "paired_detection_difference", "real_mean_breadth",
             "parent_weighted_control_breadth", "paired_breadth_difference", "mc_detection_se", "mc_breadth_se", "zero_control_probability_upper95")
-CONTRAST_SCHEMA = table_schema(("group", "condition", "endpoint", "population", "measure", "mc_assumptions") + MEASURES,
+CONTRAST_SCHEMA = table_schema(("group", "condition", "condition_role", "panel_version", "endpoint", "population", "measure", "mc_assumptions") + MEASURES,
                                ("planned_parents", "eligible_parents", "excluded_short_parents", "unresolved_parents", "incomplete_parents",
                                 "censored_parents", "partially_censored_parents", "chance_limited_parents", "degenerate_null_parents", "real_positive", "control_draws", "draws_per_parent", "target_limited_parents"))
 MEMBERSHIP_SCHEMA = table_schema(("sequence_id", "role", "parent_id", "group", "condition"))
 ELIGIBILITY_SCHEMA = table_schema(("sequence_id", "accession_version", "population", "state", "reason"))
+BUNDLE_COLUMNS = {"panel_version", "condition_role"}
+PRIMARY_UNION = "primary_union"
 OUTCOME_V1_SCHEMA = table_schema(tuple(name for name, field in OUTCOME_SCHEMA["properties"].items()
-                                     if field["type"] == "string" and name not in {"detection_resolution", "breadth_resolution"}),
+                                     if field["type"] == "string" and name not in {"detection_resolution", "breadth_resolution"} | BUNDLE_COLUMNS),
                                tuple(name for name, field in OUTCOME_SCHEMA["properties"].items() if field["type"] == "integer"))
 CONTRAST_V1_SCHEMA = table_schema(tuple(name for name, field in CONTRAST_SCHEMA["properties"].items()
-                                      if field["type"] == "string" and name != "measure"),
+                                      if field["type"] == "string" and name not in {"measure"} | BUNDLE_COLUMNS),
                                 tuple(name for name, field in CONTRAST_SCHEMA["properties"].items() if field["type"] == "integer"))
 
 
@@ -104,10 +107,17 @@ def build_outcomes(events: list[dict], logical: list[dict], statuses: list[dict]
     counts = defaultdict(lambda: defaultdict(set))
     for (sequence, endpoint, population, accession), key in states.items():
         counts[sequence, endpoint, population][reasons[key][0]].add(accession)
+    parent_roles = {}
+    for row in logical:
+        if row["role"] == "real":
+            declared = condition_role(policy, row["condition"])
+            if parent_roles.setdefault(row["parent_id"], declared) != declared:
+                raise ContractError("A canonical parent belongs to conditions with different bundle roles")
     outcomes = []
     for row in logical:
         status = by_sequence[row["sequence_id"]]
         completed = status["status"] in {"success_hits", "success_zero"}
+        declared = parent_roles[row["parent_id"]]
         for endpoint in ("strict", "tolerant"):
             for population in policy["record_populations"]:
                 selected = counts[row["sequence_id"], endpoint, population]
@@ -129,6 +139,7 @@ def build_outcomes(events: list[dict], logical: list[dict], statuses: list[dict]
                                      detection_resolution=unavailable or ("unresolved" if unresolved and not included else "resolved"),
                                      breadth_resolution=unavailable or ("unresolved" if unresolved else "resolved"),
                                      null_state=null_state, retrieval="target_limit_reached" if status["target_limit_reached"] == "yes" else "retained_not_exhaustive",
+                                     panel_version=declared["panel_version"], condition_role=declared["role"],
                                      retained_accessions=included, positive=-1 if censored else 1 if included else -1 if unresolved or not completed or censored else 0,
                                      unresolved_subjects=unresolved, excluded_subjects=len(selected["excluded"])))
     contrasts = matched_contrasts(outcomes, draws_per_parent, seed_reuse)
@@ -139,14 +150,28 @@ def build_outcomes(events: list[dict], logical: list[dict], statuses: list[dict]
     return outcomes, contrasts, memberships, eligibility
 
 
-def matched_population(outcomes: list[dict], group: str, condition: str, endpoint: str, population: str, draws_per_parent: int, *, measure: str):
+def in_union(row: dict, roles: tuple | None, panel_versions: tuple | None) -> bool:
+    # Rows written before bundle roles existed are historical primary v1 rows.
+    return ((roles is None or row.get("condition_role", "primary") in roles) and
+            (panel_versions is None or row.get("panel_version", "v1") in panel_versions))
+
+
+def matched_population(outcomes: list[dict], group: str, condition: str, endpoint: str, population: str, draws_per_parent: int, *, measure: str,
+                       roles: tuple | None = ("primary",), panel_versions: tuple | None = None):
+    """Matched parents and draws for one context.
+
+    Union contexts (condition 'all_conditions', including the Global union) contain only conditions whose bundle role is
+    in ``roles`` and whose panel version is in ``panel_versions`` (None = all). Condition-specific contexts are never
+    role-filtered, so superseded and alternative families keep their own flagged estimates.
+    """
     if measure not in {"detection", "breadth"}:
         raise ContractError("Matched population requires detection or breadth measure")
     selected = [row for row in outcomes if row["endpoint"] == endpoint and row["population"] == population]
     if any(f"{measure}_resolution" not in row for row in selected):
         raise ContractError("Measure-specific outcome contract required")
     real = {row["parent_id"]: row for row in selected if row["role"] == "real"
-            and (group == "Global union" or row["group"] == group) and (condition == "all_conditions" or row["condition"] == condition)}
+            and (group == "Global union" or row["group"] == group)
+            and (row["condition"] == condition if condition != "all_conditions" else in_union(row, roles, panel_versions))}
     controls = defaultdict(list)
     for row in selected:
         if row["role"] == "control" and row["parent_id"] in real:
@@ -180,12 +205,15 @@ def matched_population(outcomes: list[dict], group: str, condition: str, endpoin
 
 def matched_contrasts(outcomes: list[dict], draws_per_parent: int, seed_reuse: int = 0) -> list[dict]:
     real_rows = [row for row in outcomes if row["role"] == "real"]
-    groups = sorted({row["group"] for row in real_rows})
+    declared = {row["condition"]: (row.get("condition_role", "primary"), row.get("panel_version", "v1")) for row in real_rows}
+    groups = sorted({row["group"] for row in real_rows if in_union(row, ("primary",), None)})
     contexts = [(group, "all_conditions") for group in groups] + [("Global union", "all_conditions")]
     contexts += sorted({(row["group"], row["condition"]) for row in real_rows})
+    union_versions = ";".join(sorted({version for role, version in declared.values() if role == "primary"}))
     strata = sorted({(row["endpoint"], row["population"]) for row in real_rows})
     contrasts = []
     for group, condition in contexts:
+        role, version = (PRIMARY_UNION, union_versions) if condition == "all_conditions" else declared[condition]
         for endpoint, population in strata:
             for measure, field in (("detection", "positive"), ("breadth", "retained_accessions")):
                 real, controls, eligible, attrition = matched_population(outcomes, group, condition, endpoint, population,
@@ -209,7 +237,8 @@ def matched_contrasts(outcomes: list[dict], draws_per_parent: int, seed_reuse: i
                         if draws_per_parent > 1:
                             measures["mc_" + measure + "_se"] = str(sum(statistics.variance(row[field] for row in controls[parent]) / draws_per_parent
                                                                          for parent in eligible) ** 0.5 / size)
-                contrasts.append(dict(group=group, condition=condition, endpoint=endpoint, population=population, measure=measure,
+                contrasts.append(dict(group=group, condition=condition, condition_role=role, panel_version=version,
+                                      endpoint=endpoint, population=population, measure=measure,
                                       mc_assumptions=assumptions, planned_parents=len(real), eligible_parents=size,
                                       excluded_short_parents=attrition["short"], unresolved_parents=attrition["unresolved"],
                                       incomplete_parents=attrition["incomplete"], censored_parents=attrition["censored"],

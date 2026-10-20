@@ -10,7 +10,7 @@ from .legacy import REAL_BLAST_FILES
 from .matching import parse_legacy_hsp, strict_hsp, tolerant_hsp
 from .panels import LOGICAL_SCHEMA
 from .outcomes import CONTRAST_SCHEMA, ELIGIBILITY_SCHEMA, MEMBERSHIP_SCHEMA, OUTCOME_SCHEMA, build_outcomes, project_real_events
-from .policy import applicability, load_policy
+from .policy import applicability, load_policy, primary_event
 from .search import STATUS_SCHEMA, iter_hsps, object_digest, validate_completed_batch
 from .sequences import accession_version, canonical, canonical_id, read_fasta
 
@@ -73,6 +73,8 @@ def derive_event_tables(events: list[dict], groups: list[str], destination: Path
     # before building primary event, accession and positional summaries.
     if policy and "detectability" in policy:
         events = [row for row in events if applicability(row["qlen"], "strict", policy) == "operational_retained_search"]
+    if policy:
+        events = [row for row in events if primary_event(row, policy)]
     density, unique = Counter(), defaultdict(set)
     memberships = defaultdict(set)
     for row in events:
@@ -248,7 +250,9 @@ def analyse_search(panel: Path, search: Path, destination: Path, calibration_mig
     if request.get("length_calibration"):
         if calibration_migration is not None:
             raise ContractError("Search already carries its runtime calibration; do not supply a migration")
-        calibration, calibration_source = request["length_calibration"], dict(kind="runtime_request")
+        calibration = request["length_calibration"]
+        calibration_source = (dict(kind="bundle_assembly", provenance=request["calibration_provenance"])
+                              if request.get("assembly_contract") == "verified_bundle_projection_v1" else dict(kind="runtime_request"))
     elif calibration_migration is not None:
         from .testability_migration import validate_migration
         calibration = validate_migration(calibration_migration, search, request, complete)["length_calibration"]

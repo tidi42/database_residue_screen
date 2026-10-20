@@ -15,6 +15,9 @@ from .sequences import read_fasta
 SCIENCE_FIELDS = ("mode", "database_acceptance", "environment", "database_prefix", "database_evidence_sha256",
                   "database_metadata_conflicts", "database_identity_verified", "executable", "executable_version",
                   "executable_sha256", "settings", "parser_sha256")
+SUBSET_CONTRACT = "verified_query_projection_v1"
+BUNDLE_CONTRACT = "verified_bundle_projection_v1"
+PROJECTION_CONTRACTS = {SUBSET_CONTRACT, BUNDLE_CONTRACT}
 PROJECTION_FILES = {"queries.fasta", "blast.tsv", "stderr.txt", "stdout.txt", "status.tsv", "command.json",
                     "source_complete.json", "source_batch.json"}
 
@@ -63,7 +66,8 @@ def subset_text(source, query_ids):
         "".join(blocks[query_id]) for query_id in query_ids) + f"# BLAST processed {len(query_ids)} queries\n"
 
 
-def source_records(sources, queries):
+def source_records(sources, queries, science_check=None):
+    science_check = science_check or require_same_science
     entries, requests, covered, baseline, fingerprints = [], [], set(), None, {}
     for source in sources:
         source = source.resolve()
@@ -73,7 +77,7 @@ def source_records(sources, queries):
         if request.get("assembly_contract"):
             raise ContractError("Use original executions, not a prior query projection, as subset sources")
         if baseline is not None:
-            require_same_science(baseline, request)
+            science_check(baseline, request)
         baseline = request
         requests.append(dict(directory=str(source), request_sha256=digest(source / "request.json"), request=request))
         source_seen = set()
@@ -142,7 +146,7 @@ def projection_record(directory, request, source, original, batch_id, query_ids)
 
 
 def validate_projection_batch(directory, request, record):
-    if request.get("assembly_contract") != "verified_query_projection_v1" or set(record["files"]) != PROJECTION_FILES:
+    if request.get("assembly_contract") not in PROJECTION_CONTRACTS or set(record["files"]) != PROJECTION_FILES:
         raise ContractError("Invalid query-projection contract or file inventory")
     for name, checksum in record["files"].items():
         if digest(directory / name) != checksum:
@@ -156,7 +160,11 @@ def validate_projection_batch(directory, request, record):
     if ((root / "quarantine.json").exists() or original_request != evidence["request"] or
             digest(root / "request.json") != evidence["request_sha256"] or original_request.get("assembly_contract")):
         raise ContractError("Projected search source changed or was quarantined")
-    require_same_science(request, original_request)
+    if request["assembly_contract"] == BUNDLE_CONTRACT:
+        from .bundle import require_equivalent_science
+        require_equivalent_science(request, original_request)
+    else:
+        require_same_science(request, original_request)
     if Path(source["batch_directory"]).name != source["batch_directory"]:
         raise ContractError("Unsafe projected source directory")
     original_directory = root / source["batch_directory"]
@@ -199,6 +207,11 @@ def assemble_subset(panel, sources, destination):
                    assembly_contract="verified_query_projection_v1", source_searches=requests,
                    assembler_sha256=digest(Path(__file__)),
                    execution_scope="Source requests preserve actual batch sizes, thread counts and execution times; this is a query-level assembly")
+    return write_projection(destination, request, requests, entries, queries,
+                            "Verified per-query subset of matching completed searches; retained results, not exhaustive retrieval")
+
+
+def write_projection(destination, request, requests, entries, queries, interpretation):
     destination.mkdir(parents=True, exist_ok=False)
     save_json(destination / "request.json", request)
     source_database = Path(requests[0]["directory"]) / "database_evidence.json"
@@ -236,7 +249,7 @@ def assemble_subset(panel, sources, destination):
                   completed_queries=len(statuses), success_zero=sum(row["status"] == "success_zero" for row in statuses),
                   hsp_rows=sum(row["hsp_rows"] for row in statuses), target_limit_reached=sum(row["target_limit_reached"] == "yes" for row in statuses),
                   output_bytes=sum(row["output_bytes"] for row in batches), batches=batches,
-                  interpretation="Verified per-query subset of matching completed searches; retained results, not exhaustive retrieval")
+                  interpretation=interpretation)
     save_json(destination / "complete.pending.json", report)
     (destination / "complete.pending.json").rename(destination / "complete.json")
     return report

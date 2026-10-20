@@ -3,6 +3,11 @@ from pathlib import Path
 from .contracts import ContractError, read_json, validate_record
 
 
+# Superseded and alternative conditions keep their own condition-level results
+# but never enter group or global unions.
+CONDITION_ROLE_VALUES = ("primary", "superseded", "alternative")
+DEFAULT_CONDITION_ROLE = dict(panel_version="v1", role="primary")
+
 POLICY_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["version", "profile", "word_size", "minimum_query_length", "record_populations", "unknown_policy", "inference", "position"],
@@ -17,6 +22,12 @@ POLICY_SCHEMA = {
         "sensitivity_baseline_evalue": {"type": "number", "exclusiveMinimum": 0},
         "detectability": {"type": "array", "items": {"type": "object"}},
         "degenerate_parent_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
+        "protocol_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "condition_roles": {"type": "object", "minProperties": 1, "additionalProperties": {
+            "type": "object", "additionalProperties": False, "required": ["panel_version", "role"],
+            "properties": {"panel_version": {"type": "string", "pattern": "^v[0-9]+$"},
+                           "role": {"enum": list(CONDITION_ROLE_VALUES)},
+                           "superseded_by": {"type": "array", "items": {"type": "string"}, "uniqueItems": True}}}},
         "position": {"type": "object", "additionalProperties": False,
                      "required": ["primary_window", "primary_minimum_length", "windows", "minimum_lengths"],
                      "properties": {"primary_window": {"type": "integer", "minimum": 0},
@@ -49,7 +60,22 @@ def validate_policy(policy: dict) -> dict:
     position = policy["position"]
     if position["primary_window"] not in position["windows"] or position["primary_minimum_length"] not in position["minimum_lengths"]:
         raise ContractError("Primary positional settings must appear in the declared sensitivities")
+    roles = policy.get("condition_roles", {})
+    for condition, entry in roles.items():
+        targets = entry.get("superseded_by", [])
+        if (entry["role"] == "superseded") != bool(targets) or any(roles.get(target, {}).get("role") != "primary" for target in targets):
+            raise ContractError("Superseded conditions must name primary replacement conditions, and only they may: " + condition)
     return policy
+
+
+def condition_role(policy: dict, condition: str) -> dict:
+    """Return the declared bundle role of a condition; undeclared policies keep the historical all-primary behaviour."""
+    roles = policy.get("condition_roles")
+    if roles is None:
+        return dict(DEFAULT_CONDITION_ROLE)
+    if condition not in roles:
+        raise ContractError("Condition has no declared bundle role: " + condition)
+    return roles[condition]
 
 
 def load_policy(path: Path | None = None) -> dict:
@@ -73,3 +99,10 @@ def applicability(length: int, endpoint: str, policy: dict) -> str:
     if length < policy["minimum_query_length"][endpoint]:
         return "excluded_by_declared_length_policy"
     return "operational_retained_search"
+
+
+def primary_event(row: dict, policy: dict) -> bool:
+    """True when a projected real event belongs to a primary condition (all conditions of one parent share a role)."""
+    if "condition_roles" not in policy:
+        return True
+    return any(condition_role(policy, condition)["role"] == "primary" for condition in row["condition"].split(";") if condition)

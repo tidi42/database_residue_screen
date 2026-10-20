@@ -45,6 +45,19 @@ def validate_analysis(directory: Path, require_production: bool = False) -> dict
             source = report.get("length_calibration_source") or dict(kind="runtime_request")
             if source["kind"] == "runtime_request":
                 bound = request.get("length_calibration")
+            elif source["kind"] == "bundle_assembly":
+                from .testability_migration import completed_search, validate_migration
+                provenance = request.get("calibration_provenance")
+                if provenance != source["provenance"] or request.get("assembly_contract") != "verified_bundle_projection_v1":
+                    raise ContractError("Bundle calibration provenance disagrees with its search")
+                migration, historical = Path(provenance["migration"]["path"]), Path(provenance["migration"]["source_search"])
+                if digest(migration) != provenance["migration"]["sha256"]:
+                    raise ContractError("Bundle testability migration changed since assembly")
+                validate_migration(migration, historical, *completed_search(historical))
+                for runtime in provenance["runtime_sources"]:
+                    if digest(Path(runtime["directory"]) / "request.json") != runtime["request_sha256"]:
+                        raise ContractError("Bundle runtime-calibrated source changed since assembly")
+                bound = request["length_calibration"]
             else:
                 from .testability_migration import validate_migration
                 migration = Path(source["path"])

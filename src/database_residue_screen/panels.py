@@ -127,6 +127,14 @@ def prepare_panel(query_fasta: Path, query_metadata: Path, controls_directory: P
                             provenance_status="generated", architecture_status="not_applicable"))
     if seen_draws != {(parent, index) for parent in parents for index in range(1, draws + 1)}:
         raise ContractError("One or more canonical parents lack the requested control draws")
+    if "condition_roles" in policy:
+        from .policy import condition_role
+        roles = defaultdict(set)
+        for row in logical:
+            if row["role"] == "real":
+                roles[row["parent_id"]].add(condition_role(policy, row["condition"])["role"])
+        if any(len(values) > 1 for values in roles.values()):
+            raise ContractError("A canonical parent belongs to conditions with different bundle roles")
     from .controls import null_space_status
     # Flag only proven singleton spaces; retain their declared sampling weights.
     policy = dict(policy, degenerate_parent_ids=sorted(parent for parent in parents

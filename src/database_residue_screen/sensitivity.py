@@ -24,7 +24,7 @@ TESTABILITY_SCHEMA = table_schema(("endpoint", "testability", "testability_reaso
                                    "effective_search_space"),
                                   ("evalue_at_minimum_score", "production_evalue", "expected_chance_bound", "informativeness_limit",
                                    "testable_chance_limit"))
-COMMON_RULE_SCHEMA = table_schema(("cohort", "group", "condition", "population", "strict_reference_rate", "tolerant_reference_rate",
+COMMON_RULE_SCHEMA = table_schema(("cohort", "group", "condition", "condition_role", "population", "strict_reference_rate", "tolerant_reference_rate",
                                    "strict_control_rate", "tolerant_control_rate", "reference_conversion_rate",
                                    "pooled_control_conversion_rate", "own_control_conversion_rate",
                                    "expected_reference_conversions_under_own_controls", "interpretation"),
@@ -64,7 +64,7 @@ def historical_zero_filled(outcomes, policy):
     return rows
 
 
-def detection_summaries(outcomes, draws):
+def detection_summaries(outcomes, draws, roles=("primary",), panel_versions=None):
     """All-conditions detection summaries per group and stratum (the matched_contrasts subset used here)."""
     real_rows = [row for row in outcomes if row["role"] == "real"]
     groups = sorted({row["group"] for row in real_rows}) + ["Global union"]
@@ -74,7 +74,8 @@ def detection_summaries(outcomes, draws):
     for group in groups:
         for endpoint, population in strata:
             real, _, eligible, attrition = matched_population(by_stratum[endpoint, population], group, "all_conditions", endpoint,
-                                                              population, draws, measure="detection")
+                                                              population, draws, measure="detection", roles=roles,
+                                                              panel_versions=panel_versions)
             result[group, endpoint, population] = dict(
                 planned_parents=len(real), eligible_parents=len(eligible), censored_parents=attrition["censored"],
                 partially_censored_parents=attrition["partial"], chance_limited_parents=attrition["chance_limited"],
@@ -84,20 +85,24 @@ def detection_summaries(outcomes, draws):
 
 
 def length_sensitivity(outcomes, policy, draws):
+    """Cohort fractions. Historical inventories (1,288 full / 836 exact-calibrated in the study) are the protocol-v1
+    panel, all of its conditions including superseded ones; the primary testable cohort uses primary bundle roles."""
     calibration = {row['query_length']: row for row in policy.get('detectability', [])}
     baseline = policy.get('sensitivity_baseline_evalue', 10.)
-    cohorts = dict(full_panel_inventory=outcomes)
+    historical_scope = (None, ("v1",))
+    cohorts = dict(full_panel_inventory=(outcomes, historical_scope))
     if calibration:
         lengths = {length for length, row in calibration.items() if row['exact_evalue'] <= baseline and row['exact_witness_recovered']}
-        cohorts['baseline_exact_calibrated_length_panel'] = [row for row in outcomes if row['length'] in lengths]
-        cohorts['primary_testable_parents'] = [row for row in outcomes
-                                                if calibration[row['length']][row['endpoint'] + '_testability'] == 'testable']
+        cohorts['baseline_exact_calibrated_length_panel'] = ([row for row in outcomes if row['length'] in lengths], historical_scope)
+        cohorts['primary_testable_parents'] = ([row for row in outcomes
+                                                 if calibration[row['length']][row['endpoint'] + '_testability'] == 'testable'],
+                                                (("primary",), None))
     rows = []
-    full = detection_summaries(outcomes, draws)
-    full_counts = {group: summary['planned_parents'] for (group, _, _), summary in full.items()}
-    for cohort, selected in cohorts.items():
-        current = detection_summaries(selected, draws)
-        historical = detection_summaries(historical_zero_filled(selected, policy), draws)
+    for cohort, (selected, (roles, versions)) in cohorts.items():
+        full = detection_summaries(outcomes, draws, roles, versions)
+        full_counts = {group: summary['planned_parents'] for (group, _, _), summary in full.items()}
+        current = detection_summaries(selected, draws, roles, versions)
+        historical = detection_summaries(historical_zero_filled(selected, policy), draws, roles, versions)
         for key, contrast in current.items():
             group, endpoint, population = key
             rows.append(dict(cohort=cohort, group=group, endpoint=endpoint, population=population,
@@ -154,7 +159,9 @@ def common_rule_rows(outcomes, policy, draws):
     for cohort, selected in (("primary_testable", outcomes),
                              ("historical_zero_filled_diagnostic", historical_zero_filled(outcomes, policy))):
         real_rows = [row for row in selected if row["role"] == "real"]
-        contexts = sorted({(row["group"], "all_conditions") for row in real_rows}) + [("Global union", "all_conditions")]
+        declared = {row["condition"]: row.get("condition_role", "primary") for row in real_rows}
+        contexts = sorted({(row["group"], "all_conditions") for row in real_rows if declared[row["condition"]] == "primary"})
+        contexts += [("Global union", "all_conditions")]
         contexts += sorted({(row["group"], row["condition"]) for row in real_rows})
         for group, condition in contexts:
             for population in sorted({row["population"] for row in real_rows}):
@@ -187,7 +194,9 @@ def common_rule_rows(outcomes, policy, draws):
                         else:
                             without += 1
                 size = len(common)
-                rows.append(dict(cohort=cohort, group=group, condition=condition, population=population, planned_parents=len(real),
+                rows.append(dict(cohort=cohort, group=group, condition=condition,
+                                 condition_role="primary_union" if condition == "all_conditions" else declared[condition],
+                                 population=population, planned_parents=len(real),
                                  strict_eligible_parents=len(eligible_s), tolerant_eligible_parents=len(eligible_t), common_parents=size,
                                  control_draws=size * draws, references_without_strict_negative_controls=without,
                                  **{name: counts[name] for name in ("strict_reference_positive", "tolerant_reference_positive",

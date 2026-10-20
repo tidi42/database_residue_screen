@@ -144,6 +144,14 @@ def parser() -> argparse.ArgumentParser:
     analyse.add_argument("--output", type=Path, required=True)
     analyse.add_argument("--calibration-migration", type=Path,
                          help="calibration_migration.json from calibrate-search; only for fixed-threshold searches without runtime calibration")
+    bundle = subcommands.add_parser("assemble-bundle", help="One analysable search from a migrated historical search and new calibrated "
+                                    "searches; verified projections, nothing re-run")
+    bundle.add_argument("panel", type=Path, help="Bundle panel whose search_queries.fasta all sources together cover")
+    bundle.add_argument("--historical", type=Path, required=True, help="Completed historical fixed-threshold search")
+    bundle.add_argument("--migration", type=Path, required=True, help="calibration_migration.json of the historical search")
+    bundle.add_argument("--new-search", type=Path, nargs="+", required=True, help="Completed runtime-calibrated searches (bridge first)")
+    bundle.add_argument("--protocol", type=Path, help="Frozen protocol file to bind by hash")
+    bundle.add_argument("--output", type=Path, required=True)
     migration = subcommands.add_parser("calibrate-search", help="A-priori testability for a completed fixed-threshold search that predates "
                                        "runtime calibration; reads no HSPs and repeats no search")
     migration.add_argument("search", type=Path)
@@ -262,6 +270,11 @@ def main(arguments: list[str] | None = None) -> int:
             result = reanalyse_legacy(args.root, args.queries, args.metadata, args.output)
         elif args.command == "analyse-search":
             result = analyse_search(args.panel, args.search, args.output, args.calibration_migration)
+        elif args.command == "assemble-bundle":
+            from .bundle import assemble_bundle
+            report = assemble_bundle(args.panel, args.historical, args.migration, args.new_search, args.output, args.protocol)
+            result = {key: report[key] for key in ("search_id", "submitted_queries", "completed_queries", "success_zero", "hsp_rows",
+                                                   "target_limit_reached")}
         elif args.command == "calibrate-search":
             from .testability_migration import calibrate_existing_search
             record = calibrate_existing_search(args.search, args.queries, args.output, args.blastn,

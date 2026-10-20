@@ -14,7 +14,7 @@ from .eligibility import event_eligibility
 from .example import save_json
 from .outcomes import logical_memberships, project_real_events
 from .panels import LOGICAL_SCHEMA
-from .policy import applicability, load_policy
+from .policy import applicability, load_policy, primary_event
 from .reanalysis import read_events, write_completed_analysis
 from .search import STATUS_SCHEMA
 
@@ -241,6 +241,8 @@ def taxonomy_composition(real_events: list[dict], assignments: list[dict], group
     decisions = event_eligibility(real_events, policy["record_populations"]) if decisions is None else decisions
     populations = defaultdict(set)
     for row in real_events:
+        if not primary_event(row, policy):
+            continue
         for population in policy["record_populations"]:
             if decisions[row["accession_version"], population][0] != "included":
                 continue
