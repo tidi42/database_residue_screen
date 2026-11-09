@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Physical query metadata row; every query carries a family, a source and verified or synthetic provenance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["query_id", "group", "condition", "construct_class", "family_id", "source_id", "provenance_status", "architecture_status"],
+  "properties": {
+    "query_id": {"type": "string", "pattern": "^[A-Za-z0-9_.:+-]+$"},
+    "group": {"type": "string", "minLength": 1},
+    "condition": {"type": "string", "minLength": 1},
+    "construct_class": {"enum": ["barcode", "adapter", "primer", "composite"]},
+    "family_id": {"type": "string", "minLength": 1},
+    "source_id": {"type": "string", "minLength": 1},
+    "provenance_status": {"enum": ["verified", "synthetic"]},
+    "architecture_status": {"enum": ["verified", "synthetic", "not_applicable"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"construct_class": {"const": "composite"}}},
+      "then": {"properties": {"architecture_status": {"enum": ["verified", "synthetic"]}}}
+    }
+  ]
+}

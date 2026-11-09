@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Prespecified detector truth cases; negative is a sequence-support label",
+  "type": "object", "additionalProperties": false,
+  "required": ["case_id", "query_id", "subject_id", "truth", "split", "family_id", "subject_source", "error_class"],
+  "properties": {
+    "case_id": {"type": "string", "minLength": 1},
+    "query_id": {"type": "string", "minLength": 1},
+    "subject_id": {"type": "string", "minLength": 1},
+    "truth": {"enum": ["strict_positive", "tolerant_positive", "negative"]},
+    "split": {"enum": ["development", "evaluation"]},
+    "family_id": {"type": "string", "minLength": 1},
+    "subject_source": {"type": "string", "minLength": 1},
+    "error_class": {"enum": ["exact", "reverse", "partial", "substitution", "indel", "no_match", "low_complexity"]}
+  }
+}

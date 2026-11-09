@@ -1,0 +1,141 @@
+{
+  "kind": "panel_sources",
+  "description": "Pinned public sources of the Paper 3 final reference panel (retrieved 2026-10-20). Files are downloaded by `residue-screen fetch-sources` and verified by SHA-256; no source content is stored in this repository.",
+  "sources": [
+    {
+      "name": "ONT_chemistry.html",
+      "url": "https://nanoporetech.com/document/chemistry-technical-document",
+      "retrieved": "2026-10-20T09:12:52.801438+00:00",
+      "sha256": "3f31e99804132906fb30128057b7f069c3586c7f55cb8543849cf817f79ee935",
+      "bytes": 725176,
+      "purpose": "ONT Chemistry Technical Document (CHTD_500_v1_revAV_24July2026): native barcode table with forward/reverse columns, native and Rapid flank statements, barcode tables",
+      "redistribution": "Oxford Nanopore Technologies document; not redistributed here"
+    },
+    {
+      "name": "dorado_barcode_kits_v2.1.2.cpp",
+      "url": "https://raw.githubusercontent.com/nanoporetech/dorado/v2.1.2/dorado/utils/barcode_kits.cpp",
+      "retrieved": "2026-10-20T09:12:52.919343+00:00",
+      "sha256": "064055cf4e41365f440b142acf8945f1500a55f74a2995cc0b4895d3bf89031a",
+      "bytes": 78074,
+      "purpose": "Dorado v2.1.2 barcode_kits.cpp: barcode sequences, kit flanks and the SQK-RBK114-96 / SQK-NBD114-96 barcode lists",
+      "redistribution": "Dorado source file under its repository licence; not redistributed here"
+    },
+    {
+      "name": "porechop_adapters_109e437.py",
+      "url": "https://raw.githubusercontent.com/rrwick/Porechop/109e437280436d1ec27e5a5b7a34ffb752176390/porechop/adapters.py",
+      "retrieved": "2026-10-20T09:12:53.019463+00:00",
+      "sha256": "2797d2e21904777da7b33df23cb6dc62622cb0058c891bf04186ad35b8fab5ae",
+      "bytes": 29280,
+      "purpose": "Porechop adapters.py at commit 109e437: legacy ONT adapter and primer definitions (secondary source)",
+      "redistribution": "GPL-3.0 per file header; not redistributed here"
+    },
+    {
+      "name": "Illumina_UD.html",
+      "url": "https://support-docs.illumina.com/SHARE/AdapterSequences/Content/Illumina-UDIndexes.htm",
+      "retrieved": "2026-10-20T09:12:53.053840+00:00",
+      "sha256": "d4cb94ffd7e45504883c38d4ad6e631d03939663452f6b980e8ef8b22d9a7879",
+      "bytes": 735459,
+      "purpose": "Illumina Adapter Sequences 1000000002694 v22, Illumina UD Indexes: index tables (bases in adapter) and i7/i5 adapter formulas",
+      "redistribution": "Illumina document; oligonucleotide sequences © 2025 Illumina, Inc. All rights reserved; not redistributed here"
+    },
+    {
+      "name": "Illumina_Nextera.html",
+      "url": "https://support-docs.illumina.com/SHARE/AdapterSequences/Content/Nextera_Illumina-Sequences.htm",
+      "retrieved": "2026-10-20T09:12:53.640869+00:00",
+      "sha256": "f81d919c575f3d0debd280dad948769958fef49da3f808b1ff6b9045677f37c1",
+      "bytes": 20277,
+      "purpose": "Illumina Adapter Sequences v22, Illumina Prep and Nextera: transposase adapters, adapter trimming, i7/i5 PCR primer formulas",
+      "redistribution": "Illumina document; oligonucleotide sequences © 2025 Illumina, Inc. All rights reserved; not redistributed here"
+    },
+    {
+      "name": "Illumina_SmallRNA.html",
+      "url": "https://support-docs.illumina.com/SHARE/AdapterSequences/Content/TruSeq-SmallRNA.htm",
+      "retrieved": "2026-10-20T09:12:54.646650+00:00",
+      "sha256": "8396d32aa651f51a8204f2a4dc9c739bc81641993c4cdf701bd137adfe2c3620",
+      "bytes": 61456,
+      "purpose": "Illumina Adapter Sequences v22, TruSeq Small RNA: RNA 5' and 3' adapters",
+      "redistribution": "Illumina document; oligonucleotide sequences © 2025 Illumina, Inc. All rights reserved; not redistributed here"
+    },
+    {
+      "name": "Illumina_TruSeqSingle.html",
+      "url": "https://support-docs.illumina.com/SHARE/AdapterSequences/Content/SingleIndexes.htm",
+      "retrieved": "2026-10-20T09:12:56.675627+00:00",
+      "sha256": "39893395cc5d8fc2a503217203ccf75c26303d93ec9eab5f3760a8ad7ecb81b0",
+      "bytes": 23224,
+      "purpose": "Illumina Adapter Sequences v22, TruSeq Single Indexes: Read 1 / Read 2 adapter trimming sequences",
+      "redistribution": "Illumina document; oligonucleotide sequences © 2025 Illumina, Inc. All rights reserved; not redistributed here"
+    },
+    {
+      "name": "Sequel_96_barcodes_v2.zip",
+      "url": "https://www.pacb.com/wp-content/uploads/Sequel_96_barcodes_v2.zip",
+      "retrieved": "2026-10-20T09:12:56.868227+00:00",
+      "sha256": "e8b94c7e09f649dcf4776515e1184a15951cf79a9ed29740a9ec068e6390612f",
+      "bytes": 917,
+      "purpose": "PacBio Sequel 96 barcode set v2 (FASTA in ZIP; a gapped selection of the 384 v1 IDs)",
+      "redistribution": "PacBio file; not redistributed here"
+    },
+    {
+      "name": "PacBio_shared_barcodes_2015.pdf",
+      "url": "https://www.pacb.com/wp-content/uploads/Shared-Protocol-PacBio-Barcodes-for-SMRT-Sequencing.pdf",
+      "retrieved": "2026-10-20T09:12:59.032727+00:00",
+      "sha256": "178c805eef0debd6bbe08d6bb3f015a77559373078471a085f99948a9740c2bb",
+      "bytes": 92128,
+      "purpose": "PacBio shared protocol on barcodes: 16-nt barcodes and the 16+45+16 barcoded adapter (reference only)",
+      "redistribution": "PacBio document; not redistributed here"
+    },
+    {
+      "name": "PacBio_Barcoded_Adapters.xlsx",
+      "url": "https://www.pacb.com/wp-content/uploads/PacBio-Barcoded-Adapters.xlsx",
+      "retrieved": "2026-10-20T09:12:59.111847+00:00",
+      "sha256": "efa604e43f193aa4b63593b3731a520c52d1a6fb94f2186069d41f6e91cc1edd",
+      "bytes": 14778,
+      "purpose": "PacBio barcoded adapter spreadsheet: documented 16-base barcoded adapters (barcode-hairpin-reverse complement layout check)",
+      "redistribution": "PacBio file; not redistributed here"
+    },
+    {
+      "name": "PacBio_guide.pdf",
+      "url": "https://www.pacb.com/wp-content/uploads/2015/09/Guide-Pacific-Biosciences-Template-Preparation-and-Sequencing.pdf",
+      "retrieved": "2026-10-20T09:12:59.206439+00:00",
+      "sha256": "4a64eacf5ae621b655cea07c09741d26c2e175f3f447f50b000659cc42718da1",
+      "bytes": 3617259,
+      "purpose": "PacBio template preparation guide: blunt adapter and C2 primer figures (reference only)",
+      "redistribution": "PacBio document; not redistributed here"
+    },
+    {
+      "name": "Sequel_384_barcodes_v1_mirror_NIBIO.fasta",
+      "url": "https://gitlab.nibio.no/simeon/rysto-supplementary-code/-/raw/main/Sequel_384_barcodes_v1.fasta",
+      "retrieved": "2026-10-20T09:12:59.426953+00:00",
+      "sha256": "af6039d90c2f933379e9d14f4a3870a1562fc83745280b3b04f278575b1e72a3",
+      "bytes": 9600,
+      "purpose": "Third-party mirror of PacBio Sequel_384_barcodes_v1.fasta; secondary source for IDs absent from the official 96 v2 set",
+      "redistribution": "Third-party repository copy, licence not stated; not redistributed here"
+    },
+    {
+      "name": "Illumina_adapter_sequences_v22.pdf",
+      "url": "https://support-docs.illumina.com/SHARE/AdapterSequences/1000000002694_22_ilmn-adapter-sequences.pdf",
+      "retrieved": "2026-10-20T09:12:59.846672+00:00",
+      "sha256": "5b4d066eb262c8a87f33e3930a823937aba57d55a1182e415247e012d06d27e4",
+      "bytes": 600886,
+      "purpose": "Illumina Adapter Sequences document 1000000002694 v22 (PDF): Nextera DNA index tables and legacy-kit oligos; text via pdftotext -layout",
+      "redistribution": "Illumina document; oligonucleotide sequences © 2025 Illumina, Inc. All rights reserved; not redistributed here"
+    },
+    {
+      "name": "UniVec.fa",
+      "url": "https://ftp.ncbi.nlm.nih.gov/pub/UniVec/UniVec",
+      "retrieved": "2026-10-20T09:13:00.382823+00:00",
+      "sha256": "2fb50fd9749e3c31b77107e902ba81eed87a55fd2f32b99a708a6172d168a1c9",
+      "bytes": 1703918,
+      "purpose": "NCBI UniVec: NGB00972.1 (Pacific Biosciences blunt adapter) and NGB00973.1 (C2 primer)",
+      "redistribution": "NCBI public database file; not redistributed here (the live file changes with UniVec releases)"
+    },
+    {
+      "name": "MGI_G99_manual.pdf",
+      "url": "https://mgi-tech.com/uploads/files/20241230/1e3d7978135e513373cb9e62bed83d5e.pdf",
+      "retrieved": "2026-10-20T09:13:01.917038+00:00",
+      "sha256": "ba0d7c5cb948af5abe364b90f53717e77ae419a35edd03694f8174c55ce0b86e",
+      "bytes": 40173003,
+      "purpose": "MGI DNBSEQ-G99 PFI manual v9.0, PDF page 92 (printed p. 83): adapter1/adapter2 read-filter parameters; text via pdftotext -layout",
+      "redistribution": "MGI document; not redistributed here"
+    }
+  ]
+}
