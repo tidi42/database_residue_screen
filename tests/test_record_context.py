@@ -24,6 +24,25 @@ class RecordContextTests(unittest.TestCase):
         self.assertFalse(category_flags(event, None, ("included", "linear_genomic"))["terminal"])
         self.assertFalse(category_flags(event, metadata, ("included", "linear_genomic"), completed=False)["terminal"])
 
+    def test_queries_outside_the_strict_testable_set_select_no_case(self):
+        event = dict(accession_version="TEST001.1", identity_status="exact_version", slen=20000, distance_to_end=10)
+        specification = selection_specification()
+        self.assertEqual(specification["query_testability"], "strict_testable_only")
+        for metadata, decision, category in ((dict(accessionversion="TEST001.1", slen=20000, title="chromosome"), ("included", "linear_genomic"), "terminal"),
+                                             (dict(accessionversion="TEST001.1", slen=20000, title="Cloning vector pExample"), ("excluded", "synthetic"), "synthetic_or_vector"),
+                                             (dict(accessionversion="TEST001.1", slen=20000, title="chromosome"), ("unresolved", "topology"), "ambiguous")):
+            with self.subTest(category=category):
+                self.assertTrue(category_flags(event, metadata, decision, specification=specification)[category])
+                flags = category_flags(event, metadata, decision, specification=specification, testable=False)
+                self.assertFalse(any(flags[name] for name in ("terminal", "synthetic_or_vector", "internal", "ambiguous")))
+                self.assertEqual((flags["strict_testable"], flags["exclusion_reason"]), (False, "query_outside_strict_testable_set"))
+        internal = dict(event, distance_to_end=5000)
+        metadata = dict(accessionversion="TEST001.1", slen=20000, title="chromosome")
+        self.assertTrue(category_flags(internal, metadata, ("included", "linear_genomic"))["internal"])
+        self.assertFalse(category_flags(internal, metadata, ("included", "linear_genomic"), testable=False)["internal"])
+        with self.assertRaises(ContractError):
+            selection_specification(dict(query_testability="all_queries"))
+
     def test_minus_strand_and_clipped_flanks_are_verified(self):
         record = SeqRecord(Seq("NNAACCGGTTNN"), id="TEST001.1:1-12")
         hsp = dict(sstart=6, send=3, slen=12, sseq="GGTT")

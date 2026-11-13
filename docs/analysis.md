@@ -178,13 +178,17 @@ and a breadth half-width of max(1 accession, 5% of the control mean); they are
 declared criteria, not achieved precision or biological uncertainty.
 
 `assess-precision` evaluates the declared draw prefixes of a completed analysis
-bound to that specification. It reports conditional Hoeffding bounds with weights
-grouped by shared seed, non-zero zero-success bounds, per-parent diversity,
+bound to that specification. It reports conditional bounds with seed streams as
+the independent units: the relative-entropy (Chernoff) form of the Hoeffding bound
+(Hoeffding 1963, Theorem 1) on equally sized seed streams, and the additive
+Hoeffding bound with weights grouped by seed otherwise. The relative-entropy form
+uses the same assumptions (bounded outcomes, independent streams) and is much
+tighter for means near zero. The report also lists non-zero zero-success bounds, per-parent diversity,
 unsearched prefixes and attrition. Coverage assumes independence between distinct
 seed streams and is simultaneous across the declared prefixes within a stratum
 only. For the largest prefix it also writes `conditional_contrasts.tsv`: per group,
 strict all-record detection and breadth reference-minus-generator differences
-with grouped Hoeffding intervals and tail bounds, Holm-adjusted over all
+with these intervals and tail bounds, Holm-adjusted over all
 group-by-measure slots.
 Data-dependent unresolved-parent subsets get diagnostics, not certified coverage.
 Target-capped breadth remains a retained endpoint even when Monte Carlo precision

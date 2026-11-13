@@ -3,7 +3,10 @@ import unittest
 from database_residue_screen.contracts import ContractError
 from database_residue_screen.outcomes import build_outcomes
 from database_residue_screen.policy import default_policy
-from database_residue_screen.precision import grouped_half_width, precision_specification, precision_rows, validate_precision_specification
+import math
+
+from database_residue_screen.precision import (grouped_half_width, mean_interval, precision_specification, precision_rows, relative_entropy,
+                                             relative_entropy_limits, required_units, validate_precision_specification)
 import test_outcomes as outcome_fixtures
 
 
@@ -15,6 +18,55 @@ class ControlPrecisionTests(unittest.TestCase):
         self.assertGreater(independent, 0)
         with self.assertRaises(ContractError):
             grouped_half_width([0], 0.05)
+
+    def test_relative_entropy_limits_match_closed_forms(self):
+        alpha = 0.05 / 3
+        for units in (30, 1470, 13860):
+            with self.subTest(units=units):
+                lower, upper = relative_entropy_limits(0.0, units, alpha)
+                self.assertEqual(lower, 0.0)
+                self.assertAlmostEqual(upper, 1 - (alpha / 2) ** (1 / units), places=12)
+                lower, upper = relative_entropy_limits(1.0, units, alpha)
+                self.assertAlmostEqual(lower, (alpha / 2) ** (1 / units), places=12)
+                self.assertEqual(upper, 1.0)
+        lower, upper = relative_entropy_limits(0.3, 500, alpha)
+        level = math.log(2 / alpha) / 500
+        self.assertAlmostEqual(relative_entropy(0.3, lower), level, places=9)
+        self.assertAlmostEqual(relative_entropy(0.3, upper), level, places=9)
+        self.assertEqual(relative_entropy(0.0, 1.0), math.inf)
+        self.assertEqual(relative_entropy(1.0, 1.0), 0.0)
+
+    def test_relative_entropy_interval_is_never_wider_than_additive_hoeffding(self):
+        alpha = 0.05 / 3
+        for values in ([0] * 100, [0] * 99 + [1], [0, 1] * 50, [0] * 98 + [2000, 0]):
+            bound = max(1, max(values))
+            seeds = list(range(1, len(values) + 1))
+            lower, upper, half_width = mean_interval(values, seeds, alpha, bound)
+            estimate = sum(values) / len(values)
+            self.assertLessEqual(half_width, grouped_half_width(seeds, alpha, bound) + 1e-12)
+            self.assertLessEqual(lower, estimate)
+            self.assertGreaterEqual(upper, estimate)
+            self.assertTrue(0 <= lower and upper <= bound)
+
+    def test_unequal_seed_streams_use_the_grouped_additive_bound(self):
+        alpha = 0.05
+        values, seeds = [0, 0, 0, 1], [1, 1, 2, 3]
+        lower, upper, _ = mean_interval(values, seeds, alpha)
+        radius = grouped_half_width(seeds, alpha)
+        self.assertEqual((lower, upper), (max(0.0, 0.25 - radius), min(1.0, 0.25 + radius)))
+        lower, upper, half_width = mean_interval([0, 0, 1, 1], [1, 1, 2, 2], alpha)
+        self.assertAlmostEqual(upper, relative_entropy_limits(0.5, 2, alpha)[1])
+
+    def test_required_units_reach_the_target_and_one_fewer_does_not(self):
+        alpha = 0.05 / 3
+        for estimate, target, bound in ((0.0, 0.01, 1), (0.0003, 0.01, 1), (0.0, 1.0, 2000), (0.5, 0.05, 1)):
+            with self.subTest(estimate=estimate, target=target):
+                units = required_units(estimate, target, alpha, bound)
+                for count, met in ((units, True), (units - 1, False)):
+                    lower, upper = relative_entropy_limits(estimate / bound, count, alpha)
+                    width = bound * max(upper - estimate / bound, estimate / bound - lower)
+                    self.assertEqual(width <= target, met)
+        self.assertEqual(required_units(0.0, 0.01, alpha), math.ceil(math.log(2 / alpha) / -math.log(1 - 0.01)))
 
     def test_draw_prefixes_keep_parent_weights_and_unsearched_prefixes_explicit(self):
         fixture = outcome_fixtures.MatchedOutcomeTests()

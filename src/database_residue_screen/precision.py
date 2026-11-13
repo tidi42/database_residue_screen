@@ -1,6 +1,6 @@
 import math
 import statistics
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from .analysis import RESULT_CONTRACT
@@ -82,7 +82,7 @@ def write_precision_spec(panel: Path, destination: Path, draw_ladder, retention_
     report = dict(specification_sha256=digest(destination / "precision_specification.json"), panel_sha256=specification["panel_sha256"],
                   draw_ladder=specification["draw_ladder"], retention_ladder=specification["retention_ladder"],
                   assumptions="Distinct seed streams treated as independent; shared seeds form bounded dependence groups. Not biological sampling uncertainty.",
-                  precision="Two-sided Hoeffding bounds, simultaneous across the declared draw prefixes within each reported stratum; not across strata",
+                  precision="Two-sided relative-entropy Hoeffding bounds over seed streams, simultaneous across the declared draw prefixes within each reported stratum; not across strata",
                   breadth_target="max(1 retained accession, 5% of the control mean); descriptive censored endpoint")
     save_json(destination / "preparation.json", report)
     return report
@@ -94,6 +94,105 @@ def grouped_half_width(seeds: list[int], alpha: float, bound: float = 1.0) -> fl
     counts = Counter(seeds)
     squared_weights = sum((count / len(seeds)) ** 2 for count in counts.values())
     return bound * math.sqrt(math.log(2 / alpha) * squared_weights / 2)
+
+
+def relative_entropy(mean: float, expectation: float) -> float:
+    """kl(mean || expectation) of two Bernoulli laws; infinite when the expectation is 0 or 1 and the mean differs."""
+    if expectation <= 0 or expectation >= 1:
+        return 0.0 if mean == min(max(expectation, 0.0), 1.0) else math.inf
+    value = 0.0
+    if mean > 0:
+        value += mean * math.log(mean / expectation)
+    if mean < 1:
+        value += (1 - mean) * math.log((1 - mean) / (1 - expectation))
+    return max(0.0, value)
+
+
+def relative_entropy_limits(mean: float, units: int, alpha: float) -> tuple[float, float]:
+    """Two-sided limits for the expectation of `units` independent outcomes in [0, 1] with observed mean `mean`.
+
+    Hoeffding (1963, Theorem 1): P(mean <= expectation - t) <= exp(-units kl(expectation - t || expectation)), and the
+    mirror statement for the upper tail. Each limit is the farthest expectation with units * kl <= log(2 / alpha).
+    """
+    if units < 1 or not 0 < alpha < 1 or not 0 <= mean <= 1:
+        raise ContractError("Invalid relative-entropy bound inputs")
+    level = math.log(2 / alpha) / units
+    lower, upper = 0.0, 1.0
+    if mean > 0 and relative_entropy(mean, 0.0) > level:
+        low, high = 0.0, mean
+        for _ in range(200):
+            middle = (low + high) / 2
+            low, high = (middle, high) if relative_entropy(mean, middle) > level else (low, middle)
+        lower = high
+    if mean < 1 and relative_entropy(mean, 1.0) > level:
+        low, high = mean, 1.0
+        for _ in range(200):
+            middle = (low + high) / 2
+            low, high = (middle, high) if relative_entropy(mean, middle) <= level else (low, middle)
+        upper = low
+    return lower, upper
+
+
+def seed_units(values: list[float], seeds: list[int]) -> list[float] | None:
+    """Per-seed means when every seed stream holds the same number of draws, otherwise None."""
+    groups = defaultdict(list)
+    for value, seed in zip(values, seeds, strict=True):
+        groups[seed].append(value)
+    if len({len(members) for members in groups.values()}) != 1:
+        return None
+    return [statistics.mean(members) for members in groups.values()]
+
+
+def mean_interval(values: list[float], seeds: list[int], alpha: float, bound: float = 1.0) -> tuple[float, float, float]:
+    """(lower, upper, half-width) for the generator mean of outcomes in [0, bound].
+
+    Seed streams are the independent units. With equally sized streams the relative-entropy (Chernoff) form of the
+    Hoeffding bound is applied to the stream means. Unequal streams use the additive Hoeffding bound with weights
+    grouped by seed. The half-width is the larger distance from the estimate to a limit."""
+    if not values or len(values) != len(seeds) or bound <= 0 or any(not 0 <= value <= bound for value in values):
+        raise ContractError("Invalid conditional precision inputs")
+    estimate = statistics.mean(values)
+    units = seed_units(values, seeds)
+    if units is None:
+        radius = grouped_half_width(seeds, alpha, bound)
+        lower, upper = max(0.0, estimate - radius), min(bound, estimate + radius)
+    else:
+        grouped_half_width(seeds, alpha, bound)
+        low, high = relative_entropy_limits(statistics.mean(value / bound for value in units), len(units), alpha)
+        lower, upper = low * bound, high * bound
+    return lower, upper, max(upper - estimate, estimate - lower)
+
+
+def required_units(estimate: float, target: float, alpha: float, bound: float = 1.0) -> int:
+    """Smallest number of independent equally weighted units whose interval half-width at `estimate` is within `target`."""
+    if target >= bound:
+        return 1
+    mean = min(max(estimate / bound, 0.0), 1.0)
+
+    def half_width(units: int) -> float:
+        lower, upper = relative_entropy_limits(mean, units, alpha)
+        return bound * max(upper - mean, mean - lower)
+
+    high = 1
+    while half_width(high) > target:
+        high *= 2
+    low = high // 2
+    while high - low > 1:
+        middle = (low + high) // 2
+        low, high = (low, middle) if half_width(middle) <= target else (middle, high)
+    return high
+
+
+def contrast_log_tail(reference: float, control_values: list[float], seeds: list[int], stages: int, bound: float) -> float:
+    """Log of the stage-protected two-sided tail bound for a generator mean equal to the fixed reference mean."""
+    units = seed_units(control_values, seeds)
+    control = statistics.mean(control_values)
+    if units is None:
+        squared = sum((count / len(seeds)) ** 2 for count in Counter(seeds).values())
+        exponent = 2 * (reference - control) ** 2 / (bound ** 2 * squared)
+    else:
+        exponent = len(units) * relative_entropy(statistics.mean(units) / bound, reference / bound)
+    return min(0.0, math.log(2 * stages) - exponent)
 
 
 def precision_rows(outcomes: list[dict], specification: dict, target_limit: int, available_draws: int) -> tuple[list, list]:
@@ -121,11 +220,11 @@ def precision_rows(outcomes: list[dict], specification: dict, target_limit: int,
                         estimate = statistics.mean(row[field] for row in selected)
                         if any(not 0 <= row[field] <= bound for row in selected):
                             raise ContractError("Observed retained outcome exceeds the declared precision bound")
-                        radius = grouped_half_width(seeds, alpha, bound)
+                        lower, upper, radius = mean_interval([row[field] for row in selected], seeds, alpha, bound)
                         target = specification["detection_half_width"] if measure == "detection" else max(specification["breadth_absolute_half_width"], specification["breadth_relative_half_width"] * estimate)
-                        required = math.ceil(math.log(2 / alpha) * bound**2 / (2 * target**2))
+                        required = required_units(estimate, target, alpha, bound)
                         values.update(estimate=str(estimate), half_width=str(radius), target_half_width=str(target),
-                                      lower=str(max(0, estimate - radius)), upper=str(min(bound, estimate + radius)), precision_met="yes" if radius <= target else "no")
+                                      lower=str(lower), upper=str(upper), precision_met="yes" if radius <= target else "no")
                         if len(eligible) != len(real) - attrition["short"] - attrition["censored"] - attrition["partial"] - attrition["chance_limited"]:
                             status = "diagnostic_resolved_subset_no_coverage_claim"
                             values["precision_met"] = "not_estimated"
@@ -157,7 +256,9 @@ def precision_rows(outcomes: list[dict], specification: dict, target_limit: int,
 
 
 def format_log_probability(value: float) -> str:
-    """Print exp(value) without underflow; extreme bounds never become zero."""
+    """Print exp(value) without underflow; only an exactly impossible tail (value -inf) prints as 0."""
+    if value == -math.inf:
+        return "0"
     if value >= math.log(1e-300):
         return str(math.exp(value))
     exponent = math.floor(value / math.log(10))
@@ -168,9 +269,10 @@ def conditional_rows(outcomes: list[dict], specification: dict, target_limit: in
                      endpoint: str = "strict", population: str = "all_records") -> list[dict]:
     """Reference-versus-generator contrasts with Holm adjustment.
 
-    D = reference mean - control generator mean. The stage-protected Hoeffding
-    interval for the generator mean (precision radius at alpha/K) is subtracted
-    from the fixed reference mean; p = min(1, 2K exp(-2 D^2 / (B^2 sum w^2))).
+    D = reference mean - control generator mean. The stage-protected interval for
+    the generator mean (relative-entropy Hoeffding bound at alpha/K, see
+    mean_interval) is subtracted from the fixed reference mean;
+    p = min(1, 2K exp(-n kl(control / B || reference / B))) over n seed streams.
     Holm covers every group-by-measure slot, retaining non-estimable slots as
     one. Bounds concern Monte Carlo error of the generator expectation for fixed
     sequences, not exchangeability, contamination or generalisation; expected
@@ -204,11 +306,11 @@ def conditional_rows(outcomes: list[dict], specification: dict, target_limit: in
                               expected_reference_total=str(sum(statistics.mean(row[field] for row in controls[parent]) for parent in eligible)))
                 if status == "conditional_bound":
                     seeds = [row["seed"] for row in selected]
-                    radius = grouped_half_width(seeds, alpha, bound)
-                    squared = sum((count / len(seeds)) ** 2 for count in Counter(seeds).values())
-                    log_tail = min(0.0, math.log(2 * stages) - 2 * (reference - control) ** 2 / (bound ** 2 * squared))
-                    values.update(interval_lower=str(reference - min(bound, control + radius)),
-                                  interval_upper=str(reference - max(0, control - radius)), tail_bound=format_log_probability(log_tail))
+                    outcome_values = [row[field] for row in selected]
+                    lower, upper, _ = mean_interval(outcome_values, seeds, alpha, bound)
+                    log_tail = contrast_log_tail(reference, outcome_values, seeds, stages, bound)
+                    values.update(interval_lower=str(reference - upper), interval_upper=str(reference - lower),
+                                  tail_bound=format_log_probability(log_tail))
             logs.append(log_tail)
             rows.append(dict(group=group, endpoint=endpoint, population=population, measure=measure, status=status,
                              planned_parents=len(real), matched_parents=len(eligible), control_draws=len(selected),
@@ -244,11 +346,11 @@ def assess_precision(analysis: Path, specification_file: Path, destination: Path
         write_table(destination / "conditional_contrasts.tsv",
                     conditional_rows(outcomes, specification, source["search_settings"]["max_target_seqs"]), CONDITIONAL_SCHEMA)
     final_stage = [row for row in rows if row["draws_per_parent"] == specification["draw_ladder"][-1]]
-    report = dict(stage="conditional_null_precision_not_retrieval_acceptance", result_contract="measure_precision_v2",
+    report = dict(stage="conditional_null_precision_not_retrieval_acceptance", result_contract="measure_precision_v3",
                   source_analysis_sha256=digest(analysis / "analysis.json"), specification_sha256=digest(specification_file),
                   all_final_stage_targets_met=bool(final_stage) and all(row["precision_met"] == "yes" and row["status"] == "conditional_bound" for row in final_stage),
                   biological_sampling_uncertainty=False, retrieval_adequacy_established=False,
-                  bound="Hoeffding with total weight grouped by seed; simultaneous across the declared draw prefixes per stratum, conditional on independence between seed streams",
+                  bound="Hoeffding relative-entropy (Chernoff) bound over seed streams; simultaneous across the declared draw prefixes per stratum, conditional on independence between seed streams",
                   conditional_contrasts="Reference-generator contrasts with Holm adjustment over all group-by-measure slots",
                   files={path.name: digest(path) for path in sorted(destination.glob("*.tsv"))})
     save_json(destination / "precision.json", report)

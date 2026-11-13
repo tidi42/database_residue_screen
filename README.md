@@ -3,10 +3,12 @@
 A Python framework for reproducible screening of deposited nucleotide records
 against one declared library-preparation reference panel.
 
-**Version 1.0.2.** Release 1.0.2 is the version used for the Paper 3 analysis of NCBI core_nt (`studies/paper3`).
+**Version 1.0.3.** Release 1.0.3 is the version used for the Paper 3 analysis of NCBI core_nt (`studies/paper3`).
 Release 1.0.1 corrected the benchmark check of one-base HSPs, whose strand the tabular BLAST+ output does not express.
-Release 1.0.2 revises the figure texts, display-class labels, and exported table names of the reporting stages. All
-other stages are unchanged from 1.0.0.
+Release 1.0.2 revised the figure texts, display-class labels, and exported table names of the reporting stages.
+Release 1.0.3 bounds control means with the relative-entropy (Chernoff) form of the Hoeffding inequality, selects
+record cases from strict-testable queries only (`record_triage_v2`), and restricts every result figure to testable
+queries. The search, analysis, and all other stages are unchanged from 1.0.0.
 The package provides traceback-validated strict and tolerant matching, pinned
 dinucleotide-shuffled controls, resumable BLAST execution with a production
 database gate and a-priori length-aware testability, eligibility-aware
@@ -209,8 +211,8 @@ explicitly labelled ungated fractions (testability gate removed);
 `common_rule_contrasts.tsv` for strict/tolerant comparisons on parents eligible for
 both rules. `precision-spec` takes the draw ladder (for example 5 10 15) and the
 retention ladder (for example 500 2000) explicitly; `assess-precision` evaluates
-those draw prefixes and also writes `conditional_contrasts.tsv` (grouped Hoeffding
-bounds with Holm adjustment).
+those draw prefixes and also writes `conditional_contrasts.tsv` (relative-entropy
+Hoeffding bounds over seed streams with Holm adjustment).
 
 Use `--study study.json` to validate/hash declared search parameters and check
 analysis position grids. The implemented failure policy is

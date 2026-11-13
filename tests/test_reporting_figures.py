@@ -9,10 +9,11 @@ from pathlib import Path
 
 import reporting_fixture
 from test_reporting_reports import report_inputs
-from database_residue_screen.contracts import ContractError
-from database_residue_screen.reporting.figure_sources import CONTRACT, build_figure_sources
+from database_residue_screen.contracts import ContractError, read_table
+from database_residue_screen.outcomes import OUTCOME_SCHEMA
+from database_residue_screen.reporting.figure_sources import CONTRACT, alignment_quality, build_figure_sources, rule_testable_parents
 from database_residue_screen.reporting.figures import build_figures
-from database_residue_screen.reporting.metrics import compute_metrics
+from database_residue_screen.reporting.metrics import compute_metrics, read_logical, read_statuses
 from database_residue_screen.reporting.reports import build_reports
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "studies" / "paper3" / "figures"
@@ -55,6 +56,7 @@ class FigureSourceTests(FigureSourceCase):
         for name, checksum in manifest["files"].items():
             self.assertEqual(hashlib.sha256((self.sources / name).read_bytes()).hexdigest(), checksum, name)
         self.assertEqual(manifest["counts"], dict(physical_references=17, canonical_parents=16, conditions=11, controls=240, draws_per_parent=15,
+                                                  strict_testable_parents=11, tolerant_testable_parents=9, strict_testable_reference_hsps=19,
                                                   distinct_searches=manifest["counts"]["distinct_searches"], testable_strict_accessions=7,
                                                   positional_events=8, cap_sequences=2))
         self.assertEqual(manifest["draw_prefixes"], [5, 10, 15])
@@ -95,11 +97,46 @@ class FigureSourceTests(FigureSourceCase):
         self.assertEqual((qc["parents"], qc["selected_draws"], qc["invariants_failed"]), ("16", "240", "0"))
         acceptance = {(row["group"], row["acceptance"]): int(row["hsp_rows"]) for row in table(self.sources / "quality_acceptance.tsv")}
         self.assertEqual(acceptance["PacBio", "Rejected"], 5)
+        self.assertEqual(sum(acceptance.values()), 19)
         fixed = table(self.sources / "precision_fixed_cohort.tsv")
         self.assertEqual({row["draws_per_parent"] for row in fixed}, {"5", "10", "15"})
         examples = table(self.sources / "matching_examples.tsv")
         self.assertEqual([row["decision"] for row in examples], ["Strict", "Tolerant", "Tolerant", "Rejected", "Rejected", "Rejected"])
         self.assertEqual(len(table(self.sources / "record_case_verification.tsv")), 2)
+
+    def test_result_tables_keep_strict_testable_queries_only(self):
+        analysis = self.study["taxonomy"]
+        outcomes = read_table(analysis / "outcomes.tsv", OUTCOME_SCHEMA)
+        logical, statuses = read_logical(analysis / "logical_queries.tsv"), read_statuses(analysis / "search_status.tsv")
+        testable = rule_testable_parents(outcomes)
+        applicability = {row["parent_id"]: row["applicability"] for row in outcomes
+                         if (row["role"], row["endpoint"], row["population"]) == ("real", "strict", "all_records")}
+        self.assertEqual(testable, {parent for parent, state in applicability.items() if state == "operational_retained_search"})
+        self.assertEqual((len(testable), len(rule_testable_parents(outcomes, "tolerant"))), (11, 9))
+        # The chance-limited 23-nt and the untestable 19-nt references return HSPs; none of them reaches the quality tables.
+        sequences = {row["sequence_id"]: row["parent_id"] for row in logical if row["role"] == "real"}
+        excluded = {sequence: statuses[sequence]["hsp_rows"] for sequence, parent in sequences.items()
+                    if parent not in testable and sequence in statuses and statuses[sequence]["hsp_rows"]}
+        self.assertEqual(sorted(excluded.values()), [1, 2])
+        self.assertEqual({applicability[sequences[sequence]] for sequence in excluded}, {"chance_limited", "censored_untestable"})
+        kept = sum(statuses[sequence]["hsp_rows"] for sequence, parent in sequences.items() if parent in testable and sequence in statuses)
+        self.assertEqual(kept, 19)
+        self.assertEqual(sum(int(row["hsp_rows"]) for row in table(self.sources / "quality_acceptance.tsv")), kept)
+        marginal = table(self.sources / "quality_marginal.tsv")
+        self.assertEqual(sum(int(row["hsp_rows"]) for row in marginal if row["measure"] == "Identity"), kept)
+        self.assertEqual(alignment_quality(self.study["search"], logical, statuses, set()), ([], [], []))
+        # Control tables flag the strict-testable parents. The repeated and parent-identical draws belong to short untestable parents.
+        parents = table(self.sources / "control_parent_qc.tsv")
+        self.assertEqual({row["parent_id"] for row in parents if row["strict_testable"] == "True"}, testable)
+        self.assertTrue(all(row["strict_testable"] == str(row["parent_id"] in testable) for row in parents))
+        qc = table(self.sources / "control_qc_summary.tsv")[0]
+        self.assertEqual((qc["testable_parents"], qc["testable_draws"]), ("11", "165"))
+        self.assertEqual((qc["repeated_canonical"], qc["parent_identical_canonical"]), ("10", "1"))
+        self.assertEqual((qc["testable_repeated_canonical"], qc["testable_parent_identical_canonical"]), ("0", "0"))
+        tested = [row for row in parents if row["strict_testable"] == "True"]
+        self.assertEqual(sum(int(row["repeated_canonical"]) for row in tested), 0)
+        properties = table(self.sources / "query_properties.tsv")
+        self.assertEqual({row["parent_id"] for row in properties if row["strict_testable"] == "True"}, testable)
 
     def test_deterministic_and_refusing_foreign_inputs(self):
         again = self.root / "sources-again"

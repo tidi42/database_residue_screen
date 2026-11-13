@@ -55,7 +55,7 @@ One directory per report (`reports.json` lists them):
 | `benchmark_misses/` | Tolerant truth-positive pairs not accepted in the `[reports] benchmark_arm`, at every database size, with the reason (no seed, seed without HSP, HSP not qualifying) and denominators. |
 | `census/` | Flank-census class counts per family and window status. |
 | `exact_scan_validation/` | Exact scan against the strict BLAST endpoint: concordance by query length and discordant classes. |
-| `inference/` | Conditional reference-versus-control bounds per group and measure (grouped Hoeffding bounds with Holm adjustment) and control precision at the `[reports] draw_prefixes`. |
+| `inference/` | Conditional reference-versus-control bounds per group and measure (relative-entropy Hoeffding bounds over seed streams with Holm adjustment) and control precision at the `[reports] draw_prefixes`. |
 | `record_cases/` | Sequence-level checks of the selected record cases (window rebuilt from the retrieved record and compared base by base). |
 
 ## `figure_sources` and `figures` stages
@@ -69,3 +69,20 @@ PNG with its CSV data, and writes `figures_manifest.json`. PNG and CSV files are
 byte-deterministic; PDF files embed a creation time, so the manifest records a
 PDF content digest with the date blanked. Required R packages: ggplot2,
 patchwork, dplyr, tidyr, readr, jsonlite, digest, ragg and scales.
+
+Result figures show testable queries only. A parent is testable under a rule
+when its reference row in `outcomes.tsv` (all records) has applicability
+`operational_retained_search`. Untestable and chance-limited parents are left
+out. The manifest counts the strict- and tolerant-testable parents and the
+returned HSPs of the strict-testable reference sequences.
+
+| Figure (R name) | Content |
+|---|---|
+| Figure 2 (`figure1`) | Framework, matching rules and evidence states. |
+| Figure 3 (`figure2`) | A: strict and tolerant detection of references and their control draws per class and platform union. Rows without a testable parent under either rule are left out. n gives the testable, complete and resolved parents per rule. Table 1 (`table1_reference_classes.csv`) keeps every class. B: paired retained-accession breadth of the strict-testable parents. |
+| Figure 4 (`figure3`) | Positional context of strict matches of testable queries. |
+| Figure 5 (`figure4`) | A: a priori testability against query length. The calibration curves cover every panel length. Points mark the lengths that are testable under the rule of the facet. Benchmark exact spikes missed at E = 10 are drawn only at testable lengths. B–D: record cases, selected from strict-testable queries by the `record_cases` stage. |
+| Figure S1 (`figureS1`) | A: length and GC of the strict-testable parents per condition (`query_properties.strict_testable`). B, C: identity and query-span distributions of every returned HSP of the strict-testable reference sequences, rejected HSPs included. |
+| Figure S2 (`figureS4`) | Record cases with their sequence-level verification. |
+| Figure S3 (`figureS3`) | Positional robustness. |
+| Figure S4 (`figureS2`) | A: control means at the draw prefixes with their interval limits (relative-entropy Hoeffding bounds over seed streams). B: final precision targets. Control-draw quality for all parents and for the strict-testable parents (`control_parent_qc.strict_testable`, `control_qc_summary.testable_*`) is exported as Table S6. |

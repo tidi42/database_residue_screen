@@ -15,14 +15,15 @@ grDevices::pdf(NULL)
 # Paper 3 publication figures from one figure-source directory (contract publication_figure_sources_v1, written by the
 # figure_sources stage). Main figures: figure1 (framework and evidence states), figure2 (matched reference and control
 # recovery), figure3 (positional context), figure4 (a priori testability and record cases); supplementary figures: figureS1
-# (query properties and alignment quality), figureS2 (controls and Monte Carlo precision), figureS3 (positional robustness).
+# (query properties and alignment quality), figureS2 (Monte Carlo precision), figureS3 (positional robustness).
+# Result panels show testable queries only: untestable and chance-limited parents and lengths are left out.
 # The record-case figure (figureS4) is drawn by plot_record_cases.R. No panel contains a table: lookup-style content is
 # exported as CSV (tables/ inside the output directory) and every such panel is drawn from the exported CSV.
 # Artwork conventions: 180 mm wide, at most 240 mm tall, 300 dpi PNG and PDF; platform colours (ONT blue, Illumina vermilion,
 # BGI/DNBSEQ pink, PacBio green); Unicode glyphs for >=, <= and the multiplication sign; square unit brackets on axis titles;
 # US spelling; serial commas; en dashes in numeric ranges; thousands separators in counts. Union rows cover every condition.
 # R object names stay figure1-figure4; the manuscript numbers them Figures 2-5 (the graphical abstract is Figure 1).
-# Exported CSV names carry the manuscript numbers (e.g. fig2B_* for figure1 panel B, figS4C_* for figureS2, tableS6_* for Table S6).
+# Exported CSV names carry the manuscript numbers (e.g. fig2B_* for figure1 panel B, figS4B_* for figureS2, tableS6_* for Table S6).
 arguments <- commandArgs(trailingOnly = TRUE)
 stopifnot(length(arguments) %in% c(3, 4))
 input <- normalizePath(arguments[1])
@@ -55,7 +56,7 @@ short_count <- function(x) ifelse(is.na(x), NA_character_, ifelse(x >= 1e6, past
 # element that is split by platform, including per-platform heatmaps (colour intensity = count) and the Illumina match markers.
 # Categories that are not platforms use a separate family with no blue, orange, pink or green:
 # burgundy (E = 10, rejected, mismatch, failure), olive (accepted, positive, included), slate (E = 1e12, non-positive,
-# query and scaffold) and brown (excluded). Sequential heatmaps that are not platform-coded use a sand-to-burgundy ramp (S2C) or an olive ramp (S3C).
+# query and scaffold) and brown (excluded). Sequential heatmaps that are not platform-coded use a sand-to-burgundy ramp (S2B) or an olive ramp (S3C).
 ink <- "#1A1A1A"
 grey_mid <- "#7F7F7F"
 grey_light <- "#D9D9D9"
@@ -88,6 +89,10 @@ load_table <- function(name) read_tsv(file.path(input, paste0(name, ".tsv")),
                                      show_col_types = FALSE, na = c("", "not_estimated"))
 group_order <- function(data) mutate(data, group = factor(group, levels = groups))
 pt <- function(points) points / ggplot2::.pt
+serial <- function(values) {
+  values <- as.character(values)
+  if (length(values) <= 2) paste(values, collapse = " and ") else paste0(paste(values[-length(values)], collapse = ", "), ", and ", values[length(values)])
+}
 independent_panel <- function(plot) wrap_elements(full = ggplotGrob(plot))
 with_margin <- function(plot, top = 5, bottom = 5) plot + theme(plot.margin = margin(top, 5, bottom, 5))
 panel_separator <- function() wrap_elements(full = linesGrob(x = unit(c(0, 1), "npc"), y = unit(0.5, "npc"),
@@ -406,10 +411,12 @@ table1 <- export_csv(data.frame(
 stopifnot(isTRUE(all.equal(table1$ref_pct_strict / 100, ifelse(table1$strict_testable_n > 0, classes$reference_rate_strict, NA_real_))),
           isTRUE(all.equal(table1$ctrl_pct_tolerant / 100, ifelse(table1$tolerant_testable_n > 0, classes$control_rate_tolerant, NA_real_))))
 n_text <- function(n) scales::comma(n)
-arrow_rows <- table1 %>% mutate(order = row_number(),
+# Panel A shows the cohorts with at least one testable parent under either rule. Table 1 keeps every class.
+arrow_rows <- table1 %>% filter(strict_testable_n > 0 | tolerant_testable_n > 0) %>% mutate(order = row_number(),
   row_name = case_when(platform == "Global union" ~ "All platforms", block == "Platform unions" ~ paste0(platform, ", all classes"),
                        TRUE ~ paste(platform, reference_class, sep = " / ")),
-  n_label = paste0(n_text(strict_testable_n), " / ", n_text(tolerant_testable_n), " (", scales::comma(planned_parents_n), ")"))
+  n_label = paste0(n_text(strict_testable_n), " / ", n_text(tolerant_testable_n)))
+stopifnot(nrow(arrow_rows) > 0)
 arrow_data <- export_csv(bind_rows(
   transmute(arrow_rows, order, block, platform, reference_class, row_name, n_label, series = "Reference", rule = "strict", pct = ref_pct_strict, n = strict_testable_n),
   transmute(arrow_rows, order, block, platform, reference_class, row_name, n_label, series = "Reference", rule = "tolerant", pct = ref_pct_tolerant, n = tolerant_testable_n),
@@ -442,7 +449,7 @@ arrow_plot <- ggplot(filter(arrow_data, !is.na(pct)), aes(pct, ypos, colour = co
   geom_point(aes(fill = I(fill), shape = I(shape)), size = 1.9, stroke = 0.6) +
   geom_text(data = row_labels, aes(x = 104, y = y, label = n_label), inherit.aes = FALSE, hjust = 0, size = 2.75) +
   geom_text(data = block_titles, aes(x = 1, y = y, label = block), inherit.aes = FALSE, hjust = 0, size = 2.75, fontface = "italic", colour = "grey30") +
-  annotate("text", x = 104, y = row_count + 1.25, label = "n strict / tolerant\n(planned)", hjust = 0, size = 2.75, fontface = "bold", lineheight = 0.95) +
+  annotate("text", x = 104, y = row_count + 1.25, label = "n strict / tolerant", hjust = 0, size = 2.75, fontface = "bold", lineheight = 0.95) +
   scale_colour_manual(values = panel_colours, guide = "none") +
   scale_x_continuous(limits = c(-3, 150), breaks = c(0, 25, 50, 75, 100), expand = expansion(mult = 0)) +
   scale_y_continuous(limits = c(0.5, row_count + 1.9), breaks = row_labels$y, labels = row_labels$row_name, expand = expansion(mult = 0)) +
@@ -605,12 +612,16 @@ strict_label <- "Strict (exact full length)"
 tolerant_label <- "Tolerant (minimum qualifying score)"
 # The benchmark is named "benchmark" in visible text, with a multiplication sign for "x 10".
 benchmark_series <- "Exact E-value at core_nt / 10 and \u00d7 10 (benchmark)"
-missed_marker <- "Benchmark exact spikes missed at E = 10"
+missed_marker <- "Benchmark exact spikes of testable lengths missed at E = 10"
+testable_label <- "Testable panel length"
 y_floor <- 1e-12
 y_ceiling <- 1e9
 curve_data <- curves %>% mutate(rule = factor(recode(rule, strict = strict_label, tolerant = tolerant_label), levels = c(strict_label, tolerant_label)),
   class = factor(unname(class_labels[testability]), levels = unname(class_labels)),
   below = evalue_at_minimum_score < y_floor, y_plot = pmax(evalue_at_minimum_score, y_floor))
+# Points mark the lengths that are testable under the rule of the facet. The curves cover every panel length.
+testable_points <- curve_data %>% filter(testability == "testable") %>% mutate(point_label = factor(testable_label))
+stopifnot(all(c(strict_label, tolerant_label) %in% testable_points$rule))
 curve_lines <- bind_rows(
   curve_data %>% transmute(rule, length_nt, series = "E-value at minimum score (core_nt)", expectation = evalue_at_minimum_score),
   curve_data %>% transmute(rule, length_nt, series = "Chance bound (core_nt)", expectation = expected_chance_bound),
@@ -620,12 +631,17 @@ curve_lines <- bind_rows(
   mutate(database = coalesce(database, "core_nt"))
 core_spikes <- spike_summary %>% filter(database == "core_nt") %>% inner_join(curves %>% filter(rule == "strict"), by = "length_nt")
 stopifnot(nrow(core_spikes) == n_distinct(spike_summary$length_nt), isTRUE(all.equal(core_spikes$exact_evalue, core_spikes$evalue_at_minimum_score)))
-missed <- spike_summary %>% filter(calibrated_recovered < planned_spikes) %>%
+strict_testable_lengths <- curves$length_nt[curves$rule == "strict" & curves$testability == "testable"]
+all_missed <- spike_summary %>% filter(calibrated_recovered < planned_spikes)
+missed <- all_missed %>% filter(length_nt %in% strict_testable_lengths) %>%
   mutate(rule = factor(strict_label, levels = levels(curve_data$rule)), y_plot = pmin(pmax(exact_evalue, y_floor), y_ceiling),
          marker = missed_marker)
 production_e <- unique(curves$production_evalue)
-stopifnot(all(missed$exact_evalue > production_e),
+stopifnot(all(all_missed$exact_evalue > production_e),
           all(with(spike_summary, calibrated_recovered[exact_evalue <= production_e] == planned_spikes[exact_evalue <= production_e])))
+spike_text <- if (nrow(missed)) {
+  paste0("Crosses: benchmark exact spikes of testable lengths missed at E = 10 (", serial(sort(unique(missed$length_nt))), " nt).")
+} else "All benchmark exact spikes of testable lengths were recovered at E = 10."
 size_labels <- spike_summary %>% filter(database != "core_nt") %>% group_by(database) %>%
   filter(exact_evalue <= y_ceiling) %>% slice_min(length_nt, n = 1, with_ties = TRUE) %>% ungroup() %>%
   mutate(rule = factor(strict_label, levels = levels(curve_data$rule)), label = recode(database, core_nt_div10 = "/10", core_nt_x10 = "\u00d710"))
@@ -636,23 +652,23 @@ limit_lines <- data.frame(y = c(production_e, unique(curves$informativeness_limi
 evalue_plot <- ggplot(curve_data, aes(length_nt)) +
   geom_hline(data = limit_lines, aes(yintercept = y, colour = I(colour), linetype = I(linetype)), linewidth = 0.4) +
   geom_line(data = curve_lines, aes(y = expectation, linetype = series, group = interaction(series, database)), colour = "grey50", linewidth = 0.4) +
-  geom_point(aes(y = y_plot, fill = class, shape = below), colour = ink, size = 1.6, stroke = 0.35) +
-  geom_point(data = missed, aes(y = y_plot, size = marker), shape = 4, colour = burgundy, stroke = 0.7) +
+  geom_point(data = testable_points, aes(y = y_plot, fill = point_label, shape = below), colour = ink, size = 1.6, stroke = 0.35) +
+  (if (nrow(missed)) geom_point(data = missed, aes(y = y_plot, size = marker), shape = 4, colour = burgundy, stroke = 0.7)) +
   geom_text(data = size_labels, aes(x = length_nt * 0.93, y = exact_evalue, label = label), hjust = 1, size = 2.4, colour = "grey30") +
   geom_text(data = mutate(limit_lines, rule = factor(tolerant_label, levels = levels(curve_data$rule))),
     aes(x = 125, y = y, label = label, colour = I(colour), vjust = vjust), hjust = 1, size = 2.4) +
   facet_wrap(~rule, nrow = 1) +
-  scale_fill_manual(values = setNames(c(olive, sand_light, "white"), unname(class_labels)), name = NULL, drop = FALSE) +
+  scale_fill_manual(values = setNames(olive, testable_label), name = NULL) +
   scale_shape_manual(values = c(`FALSE` = 21, `TRUE` = 25), guide = "none") +
-  scale_size_manual(values = setNames(1.7, missed_marker), name = NULL) +
+  (if (nrow(missed)) scale_size_manual(values = setNames(1.7, missed_marker), name = NULL)) +
   scale_linetype_manual(values = c("E-value at minimum score (core_nt)" = "solid", "Chance bound (core_nt)" = "longdash",
     setNames("dotted", benchmark_series)), name = NULL) +
   scale_x_log10(breaks = length_breaks, limits = c(6, 125), expand = expansion(mult = 0)) +
   scale_y_log10(breaks = 10^seq(-12, 9, 3), labels = scales::label_math(10^.x, format = log10)) +
   coord_cartesian(ylim = c(y_floor, y_ceiling), expand = FALSE, clip = "on") +
   labs(title = "A  A priori testability against query length",
-    subtitle = paste0("Accepted core_nt dimensions, E = 10. Points: E-value at the minimum qualifying score. Fill: testability class.\n",
-      "Downward triangles: below the axis (testable). All other benchmark exact spikes were recovered. E = 10\u00b9\u00b2 recovered all spikes."),
+    subtitle = paste0("Accepted core_nt dimensions, E = 10. Points: testable panel lengths at the E-value of the minimum qualifying score.\n",
+      "Downward triangles: E-value below the axis. ", spike_text),
     x = "Query length [nt]", y = "Expected chance count") +
   guides(fill = guide_legend(order = 1, override.aes = list(shape = 21, colour = ink)), linetype = guide_legend(order = 2, nrow = 1),
          size = guide_legend(order = 3)) +
@@ -726,14 +742,17 @@ record_case_panel <- function(row) {
     angle <- seq(0, 2 * pi, length.out = 361)
     match_angle <- 2 * pi * ((row$match_start - 1 + row$match_end) / 2) / length_nt
     marker <- c(sin(match_angle), -cos(match_angle))
+    # The ring starts at the top (position 1, dark tick). The match range is written in the text column, so it never collides with the ring.
+    origin_text <- if (row$match_start == 1) " at the stored origin" else ""
     layers <- c(layers, list(
       annotate("path", x = centre_x + radius * sin(angle), y = centre_y - radius * cos(angle), colour = "grey70", linewidth = 1.6),
+      mm_segment(centre_x, centre_y - radius + 1.3, centre_x, centre_y - radius - 1.3, colour = ink, linewidth = 0.5),
       mm_segment(centre_x + (radius - 2.6) * marker[1], centre_y + (radius - 2.6) * marker[2],
                  centre_x + (radius + 2.6) * marker[1], centre_y + (radius + 2.6) * marker[2], colour = marker_colour, linewidth = 1.8),
-      mm_text(centre_x + 4, centre_y - radius - 2.4, paste0("Match ", match_range, " at the stored origin"), 7.5),
       mm_text(centre_x, centre_y, length_label, 8, hjust = 0.5),
-      mm_text(centre_x + radius + 9, centre_y - 2.5, paste0("Circular record of ", length_label, " nt, drawn to scale."), 8),
-      mm_text(centre_x + radius + 9, centre_y + 2.5, "Position 1 of a circular record is its stored origin.", 8)))
+      mm_text(centre_x + radius + 9, centre_y - 5, paste0("Match ", match_range, origin_text, "."), 8),
+      mm_text(centre_x + radius + 9, centre_y, paste0("Circular record of ", length_label, " nt, drawn to scale."), 8),
+      mm_text(centre_x + radius + 9, centre_y + 5, "Position 1 (top tick) is the stored origin of the circular record.", 8)))
     alignment_top <- 42.5
     height <- 51
   } else {
@@ -743,14 +762,17 @@ record_case_panel <- function(row) {
     end_x <- if (nearest_left) track_x0 else track_x1
     edge_x <- if (nearest_left) marker_centre - marker_width / 2 else marker_centre + marker_width / 2
     label_side <- if (marker_centre > 120) 1 else if (marker_centre < 40) 0 else 0.5
+    below_resolution <- abs(edge_x - end_x) < 8
     layers <- c(layers, list(
       mm_rect(track_x0, track_x1, 16.2, 19.8, fill = "#EEEEEE", colour = "grey55", linewidth = 0.35),
       mm_rect(marker_centre - marker_width / 2, marker_centre + marker_width / 2, 14.6, 21.4, fill = marker_colour),
       mm_text(marker_centre + ifelse(label_side == 1, marker_width / 2, ifelse(label_side == 0, -marker_width / 2, 0)),
         12.6, paste0("Match ", match_range), 7.5, hjust = label_side),
-      mm_text(track_x0, 23.4, "1", 7, hjust = 0.5), mm_text(track_x1 - 1.2, 23.4, length_label, 7, hjust = 1)))
+      # End labels keep clear of the tick that marks a match end below the scale resolution.
+      if (below_resolution && nearest_left) mm_text(track_x0 - 1.4, 23.4, "1", 7, hjust = 1) else mm_text(track_x0, 23.4, "1", 7, hjust = 0.5),
+      mm_text(if (below_resolution && !nearest_left) min(track_x1 - 1.2, edge_x - 1.6) else track_x1 - 1.2, 23.4, length_label, 7, hjust = 1)))
     distance_label <- paste0(format(row$distance_to_nearest_end_nt, big.mark = ",", trim = TRUE), " nt to the nearest record end")
-    if (abs(edge_x - end_x) >= 8) {
+    if (!below_resolution) {
       layers <- c(layers, list(
         annotate("segment", x = end_x, xend = edge_x, y = 26.6, yend = 26.6, colour = ink, linewidth = 0.4,
           arrow = arrow(length = unit(1.3, "mm"), ends = "both", type = "closed", angle = 22)),
@@ -827,7 +849,9 @@ condition_names <- c(
   illumina_truseq = "Illumina: TruSeq", illumina_nextera = "Illumina: Nextera", illumina_smallrna = "Illumina: Small RNA",
   illumina_bgi = "BGI/DNBSEQ: adapters", pacbio_barcode = "PacBio: barcode", pacbio_barcode_adapter = "PacBio: barcode-hairpin",
   pacbio_smrtbell_adapter = "PacBio: SMRTbell / C2", pacbio_c2_primer = "PacBio: C2 primer")
-properties <- load_table("query_properties") %>% group_order()
+# Panel A shows the strict-testable parents only.
+properties <- load_table("query_properties") %>% filter(strict_testable) %>% group_order()
+stopifnot(nrow(properties) > 0)
 # Conditions without a declared label are shown under their condition name, after the declared ones.
 extra_conditions <- sort(setdiff(unique(properties$condition), names(condition_names)))
 condition_names <- c(condition_names, setNames(extra_conditions, extra_conditions))
@@ -843,16 +867,17 @@ strict_first <- first_testable("strict")
 tolerant_first <- first_testable("tolerant")
 stopifnot(all(testability$testability[testability$endpoint == "strict" & testability$query_length < strict_first] != "testable"),
           all(testability$testability[testability$endpoint == "tolerant" & testability$query_length < tolerant_first] != "testable"))
+stopifnot(min(properties$length) >= strict_first)
+# The dotted line marks the first tolerant-testable panel length when strict-testable parents lie below it.
+tolerant_line <- any(properties$length < tolerant_first)
 length_plot <- ggplot(length_counts, aes(length, condition_label, colour = group)) +
-  annotate("rect", xmin = -Inf, xmax = strict_first - 0.5, ymin = -Inf, ymax = Inf, fill = "#EFEFEF") +
-  geom_vline(xintercept = 7, colour = "grey45", linetype = "dashed", linewidth = 0.3) +
-  geom_vline(xintercept = tolerant_first - 0.5, colour = olive, linetype = "dotted", linewidth = 0.45) +
+  (if (tolerant_line) geom_vline(xintercept = tolerant_first - 0.5, colour = olive, linetype = "dotted", linewidth = 0.45)) +
   geom_point(aes(size = parents), alpha = 0.6) + property_size +
   scale_colour_manual(values = colours, guide = "none") +
-  scale_x_continuous(limits = c(0, 120), breaks = c(7, strict_first, tolerant_first, 60, 90, 120)) +
-  labs(title = "A  Query properties",
-    x = paste0("Length [nt]. Dashed: word size 7. Gray: strict untestable or chance-limited (<", strict_first, " nt).\nDotted: tolerant testable from ",
-               tolerant_first, " nt (first testable panel length)."), y = NULL) +
+  scale_x_continuous(limits = c(0, 120), breaks = sort(unique(c(0, strict_first, if (tolerant_line) tolerant_first, 60, 90, 120)))) +
+  labs(title = "A  Query properties of strict-testable parents",
+    x = paste0("Length [nt]. Strict testable from ", strict_first, " nt.",
+               if (tolerant_line) paste0("\nDotted: tolerant testable from ", tolerant_first, " nt (first testable panel length).") else ""), y = NULL) +
   theme(axis.text.y = element_text(size = 7), axis.title.x = element_text(size = 7.5))
 composition_plot <- ggplot(composition_counts, aes(gc_fraction * 100, condition_label, colour = group)) +
   geom_point(aes(size = parents), alpha = 0.6) + property_size +
@@ -888,7 +913,10 @@ strict_calibrated <- filter(pair_recall, database == "core_nt", arm == "producti
 stopifnot(all(strict_calibrated$pair_recall[strict_calibrated$evalue_at_minimum_score > production_evalue] == 0),
   all(strict_calibrated$pair_recall[strict_calibrated$evalue_at_minimum_score <= production_evalue] == 1),
   all(pair_recall$pair_recall[pair_recall$arm == "permissive_diagnostic" & pair_recall$rule == "strict"] == 1))
+# Returned HSPs of the strict-testable reference sequences (figure_sources.alignment_quality).
 quality <- load_table("quality_marginal") %>% group_order()
+quality_hsps <- manifest$counts$strict_testable_reference_hsps
+stopifnot(sum(load_table("quality_acceptance")$hsp_rows) >= quality_hsps)
 quality_guides <- data.frame(measure = c("Identity", "Query span"), threshold = c(95, 90))
 quality_plot <- ggplot(quality, aes(value, cumulative, colour = group)) +
   geom_step(linewidth = 0.5) + geom_point(data = quality %>% group_by(group, measure) %>% filter(n() == 1) %>% ungroup(), size = 1.5) +
@@ -898,7 +926,8 @@ quality_plot <- ggplot(quality, aes(value, cumulative, colour = group)) +
   scale_x_continuous(limits = function(limits) c(if (min(limits) >= 80) 80 else 0, 100),
     breaks = function(limits) if (min(limits) >= 75) seq(80, 100, 5) else seq(0, 100, 25)) +
   scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
-    labs(title = "B  Cumulative returned-alignment distributions", subtitle = "Includes rejected reference HSPs. Guides: 95% identity and 90% query span.",
+    labs(title = "B  Cumulative returned-alignment distributions", subtitle = paste0("All ", scales::comma(quality_hsps), " returned HSPs of strict-testable reference queries. Rejected HSPs are included.\n",
+        "Guides: 95% identity and 90% query span."),
       x = "Identity / query span [%]", y = "HSP fraction") +
     theme(legend.position = "right", legend.margin = margin(0, 0, 0, 0), legend.key.height = unit(3, "mm"))
 joint <- load_table("quality_joint") %>% group_order() %>%
@@ -915,7 +944,7 @@ joint_plot <- ggplot(joint, aes(identity_bin + 0.5, span_bin + 0.5, fill = group
   scale_x_continuous(breaks = seq(joint_identity_start, 100, 5) + 0.5, labels = seq(joint_identity_start, 100, 5)) +
   scale_y_continuous(breaks = seq(0, 100, 25) + 0.5, labels = seq(0, 100, 25)) +
   coord_cartesian(xlim = c(joint_identity_start, 101), ylim = c(0, 101), expand = FALSE) +
-  labs(title = "C  Joint identity and span", subtitle = "1%-wide bins labeled by lower bound. 100 denotes exact 100%. Color intensity: HSPs per bin (log10).\nDashed lines: 95% identity and 90% query span.",
+  labs(title = "C  Joint identity and span", subtitle = "HSPs of strict-testable reference queries in 1%-wide bins labeled by lower bound. 100 denotes exact 100%.\nColor intensity: HSPs per bin (log10). Dashed lines: 95% identity and 90% query span.",
       x = "Identity bin [%]", y = "Span bin [%]")
 figureS1_heights <- c(90, separator_height, 60, separator_height, 84)
 figure_s1 <- (wrap_elements(full = patchworkGrob(properties_panel)) / panel_separator() /
@@ -960,10 +989,11 @@ if (nrow(target_parents)) {
 invisible(export_csv(target_parents, "tableS10_target_limit_parents.csv"))
 
 # ---------------------------------------------------------------------------------------------
-# Figure S2. Control quality and Monte Carlo precision
+# Figure S2. Control quality (Table S6) and Monte Carlo precision
 # ---------------------------------------------------------------------------------------------
 qc <- load_table("control_qc_summary")
-qc_parents <- load_table("control_parent_qc") %>% group_order()
+qc_parents <- load_table("control_parent_qc") %>% group_order() %>%
+  mutate(testable_identical = parent_identical_canonical * strict_testable, testable_repeated = repeated_canonical * strict_testable)
 draw_qc <- load_table("control_draw_qc") %>% select(parent_id, invariants_passed) %>%
   left_join(select(qc_parents, parent_id, group), by = "parent_id")
 stopifnot(!anyNA(draw_qc$group))
@@ -974,55 +1004,34 @@ quality_by_group <- bind_rows(lapply(groups[groups %in% qc_parents$group], funct
     distinct_sequences_min = min(distinct_canonical), distinct_sequences_max = max(distinct_canonical),
     parent_identical_canonical = sum(parent_identical_canonical), repeated_canonical = sum(repeated_canonical),
     parent_identical_exact = sum(parent_identical_exact), repeated_exact = sum(repeated_exact),
-    draws_passing_invariants = sum(draw_rows$invariants_passed), draws_total = nrow(draw_rows)))
+    draws_passing_invariants = sum(draw_rows$invariants_passed), draws_total = nrow(draw_rows),
+    testable_parents = sum(strict_testable), testable_parent_identical_canonical = sum(testable_identical),
+    testable_repeated_canonical = sum(testable_repeated)))
 }))
 quality_total <- cbind(group = "All groups", summarise(qc_parents, parents = n(), distinct_sequences_median = median(distinct_canonical),
   distinct_sequences_min = min(distinct_canonical), distinct_sequences_max = max(distinct_canonical),
   parent_identical_canonical = sum(parent_identical_canonical), repeated_canonical = sum(repeated_canonical),
   parent_identical_exact = sum(parent_identical_exact), repeated_exact = sum(repeated_exact),
-  draws_passing_invariants = sum(draw_qc$invariants_passed), draws_total = nrow(draw_qc)))
+  draws_passing_invariants = sum(draw_qc$invariants_passed), draws_total = nrow(draw_qc),
+  testable_parents = sum(strict_testable), testable_parent_identical_canonical = sum(testable_identical),
+  testable_repeated_canonical = sum(testable_repeated)))
 control_quality <- export_csv(rbind(quality_by_group, quality_total), "tableS6_control_quality.csv")
 total_row <- nrow(control_quality)
 stopifnot(control_quality$group[total_row] == "All groups",
   control_quality$parent_identical_canonical[total_row] == qc$parent_identical_canonical, control_quality$repeated_canonical[total_row] == qc$repeated_canonical,
   control_quality$parent_identical_exact[total_row] == qc$parent_identical_exact, control_quality$repeated_exact[total_row] == qc$repeated_exact,
-  control_quality$draws_passing_invariants[total_row] == qc$selected_draws, control_quality$draws_total[total_row] == qc$selected_draws)
-serial <- function(values) {
-  values <- as.character(values)
-  if (length(values) <= 2) paste(values, collapse = " and ") else paste0(paste(values[-length(values)], collapse = ", "), ", and ", values[length(values)])
-}
+  control_quality$draws_passing_invariants[total_row] == qc$selected_draws, control_quality$draws_total[total_row] == qc$selected_draws,
+  control_quality$testable_parents[total_row] == qc$testable_parents,
+  control_quality$testable_parent_identical_canonical[total_row] == qc$testable_parent_identical_canonical,
+  control_quality$testable_repeated_canonical[total_row] == qc$testable_repeated_canonical)
 
-# A: distinct draws per parent against query length (the Table S6 control-quality content as a plot)
-diversity <- export_csv(qc_parents %>% group_by(group = as.character(group), length_nt = length, distinct_canonical_controls = distinct_canonical) %>%
-  summarise(parents = n(), parent_identical_draws = sum(parent_identical_canonical), repeated_draws = sum(repeated_canonical), .groups = "drop") %>%
-  arrange(match(group, groups), length_nt, distinct_canonical_controls), "figS4A_control_diversity_by_length.csv")
-diversity_lengths <- diversity %>% group_by(length_nt) %>%
-  summarise(parent_identical_draws = sum(parent_identical_draws), repeated_draws = sum(repeated_draws), .groups = "drop")
-short_diversity <- filter(diversity_lengths, parent_identical_draws > 0)
-repeated_lengths <- diversity_lengths$length_nt[diversity_lengths$repeated_draws > 0]
-stopifnot(sum(diversity_lengths$parent_identical_draws) == qc$parent_identical_canonical, sum(diversity_lengths$repeated_draws) == qc$repeated_canonical)
-identical_text <- if (nrow(short_diversity)) {
-  paste0(qc$parent_identical_canonical, " parent-identical draws occur only at ", serial(short_diversity$length_nt), " nt (",
-         paste(short_diversity$parent_identical_draws, collapse = ", "), ").")
-} else "No draw is identical to its parent."
-repeated_text <- if (!length(repeated_lengths)) "No draw is repeated within a parent." else
-  if (nrow(short_diversity) && all(repeated_lengths %in% short_diversity$length_nt)) {
-    paste0("All ", scales::comma(qc$repeated_canonical), " repeated draws also occur only at these lengths.")
-  } else paste0(scales::comma(qc$repeated_canonical), " repeated draws occur at ", serial(repeated_lengths), " nt.")
-diversity <- diversity %>% group_by(length_nt) %>% mutate(
-  x_plot = length_nt * 10^((match(group, unique(group)) - (n_distinct(group) + 1) / 2) * 0.035)) %>% ungroup() %>%
-  mutate(group = factor(group, levels = groups))
-diversity_plot <- ggplot(diversity, aes(x_plot, distinct_canonical_controls, colour = group, size = parents)) +
-  geom_point(alpha = 0.75) +
-  scale_colour_manual(values = colours, name = NULL, guide = guide_legend(override.aes = list(size = 2.4), order = 1)) +
-  scale_size_continuous(range = c(1.2, 5), breaks = c(1, 10, 100, 300), name = "Parents", guide = guide_legend(order = 2)) +
-  scale_x_log10(breaks = c(8, 10, 16, 24, 32, 40, 61, 90), limits = c(7, 125), expand = expansion(mult = 0)) +
-  scale_y_continuous(limits = c(0, draws_per_parent + 2.5), breaks = unique(c(1, draw_prefixes)), expand = expansion(mult = 0)) +
-  labs(title = "A  Distinct draws per parent against query length",
-    subtitle = paste0("Each parent has ", draws_per_parent, " draws. ", identical_text, "\n",
-      repeated_text, " Reverse complements count as identical."),
-    x = "Query length [nt, log10 axis]", y = "Distinct\ndraws") +
-  theme(legend.position = "bottom", legend.location = "plot", legend.box = "horizontal", legend.margin = margin(0, 0, 0, 0))
+# Control draws of the strict-testable parents (legend note; all parents: Table S6).
+testable_control_note <- paste0(scales::comma(qc$testable_parents), " strict-testable parents have ", scales::comma(qc$testable_draws),
+  " control draws. ", if (qc$testable_parent_identical_canonical == 0 && qc$testable_repeated_canonical == 0)
+    "None of these draws repeats within its parent or equals its parent." else
+    paste0(scales::comma(qc$testable_parent_identical_canonical), " of these draws equal their parent and ",
+           scales::comma(qc$testable_repeated_canonical), " repeat within their parent."),
+  " Reverse complements count as identical.")
 
 precision <- load_table("precision")
 precision_selected <- precision %>% filter(condition == "all_conditions", population == "all_records", group != "Global union") %>%
@@ -1055,9 +1064,9 @@ precision_plot <- ggplot(precision_selected, aes(draws_per_parent, display_estim
   scale_shape_manual(values = c(Strict = 21, Tolerant = 24), name = NULL) +
   scale_linetype_manual(values = c(Strict = "dotted", Tolerant = "dashed"), name = NULL) +
   guides(shape = guide_legend(override.aes = list(colour = ink, fill = ink)), linetype = guide_legend()) +
-  labs(title = "B  Fixed-prefix estimates and Monte Carlo ranges",
-      subtitle = "Filled markers: conditional bound. Open markers: resolved-subset diagnostic. Y scales differ between panels.\nLines: final-parent cohort at each draw prefix (dotted: strict, dashed: tolerant). Bars: full Monte Carlo ranges.",
-       x = "Draws per parent", y = "Control mean\nand range") +
+  labs(title = "A  Fixed-prefix estimates and Monte Carlo intervals",
+      subtitle = "Filled markers: conditional bound. Open markers: resolved-subset diagnostic. Y scales differ between panels.\nLines: final-parent cohort at each draw prefix (dotted: strict, dashed: tolerant). Bars: interval limits.",
+       x = "Draws per parent", y = "Control mean\nand interval") +
   theme(legend.box = "vertical", legend.margin = margin(0, 0, 0, 0))
 precision_final <- precision %>% filter(draws_per_parent == final_prefix, condition == "all_conditions") %>%
   mutate(group = factor(group, levels = rev(c(groups, "Global union"))),
@@ -1079,7 +1088,7 @@ precision_count_label <- function(data) {
 }
 precision_tiles <- export_csv(precision_final %>% transmute(population, group = as.character(group), rule = as.character(endpoint), measure,
   half_width, target_half_width, half_width_over_target = ratio, status = status_label) %>%
-  arrange(population, match(group, c(groups, "Global union")), rule, measure), "figS4C_precision_tiles.csv")
+  arrange(population, match(group, c(groups, "Global union")), rule, measure), "figS4B_precision_tiles.csv")
 precision_final <- precision_final %>% mutate(text_colour = ifelse(log10(ratio) > 1.2, "white", "black"),
   tile_label = paste0(status_label, "\n", vapply(signif(ratio, 3), format, character(1), scientific = FALSE, trim = TRUE)))
 precision_status <- ggplot(precision_final, aes(cell, group, fill = ratio)) +
@@ -1090,18 +1099,17 @@ precision_status <- ggplot(precision_final, aes(cell, group, fill = ratio)) +
     guide = guide_colourbar(barwidth = unit(55, "mm"), barheight = unit(3, "mm"))) +
   scale_x_discrete(labels = c("strict / breadth" = "Strict\nbreadth", "strict / detection" = "Strict\ndetect.",
     "tolerant / breadth" = "Tolerant\nbreadth", "tolerant / detection" = "Tolerant\ndetect.")) +
-  labs(title = "C  Final precision targets",
+  labs(title = "B  Final precision targets",
     subtitle = paste0(precision_count_label(filter(precision_counts, condition == "all_conditions")), " Met: half-width \u2264 target.",
       "\nTile text: status and half-width / target. Fill: the same ratio on a log10 scale. Values: Table S6."), x = NULL, y = NULL) +
   theme(axis.line = element_blank(), axis.ticks = element_blank(), axis.text.x = element_text(size = 8), axis.text.y = element_text(size = 8))
-figureS2_heights <- c(61, separator_height, 88, separator_height, 88)
-figure_s3 <- (independent_panel(with_margin(diversity_plot, bottom = 0)) / panel_separator() /
-    independent_panel(with_margin(precision_plot, top = 2, bottom = 0)) / panel_separator() /
+figureS2_heights <- c(88, separator_height, 88)
+figure_s3 <- (independent_panel(with_margin(precision_plot, bottom = 0)) / panel_separator() /
     independent_panel(with_margin(precision_status, top = 2))) + plot_layout(heights = figureS2_heights)
-save_figure("figureS2", figure_s3, sum(figureS2_heights), c("Control diversity by query length", "Prefix precision", "Precision targets"),
+save_figure("figureS2", figure_s3, sum(figureS2_heights), c("Prefix precision", "Precision targets"),
   c("control_draw_qc.tsv", "control_parent_qc.tsv", "control_qc_summary.tsv", "precision.tsv", "precision_fixed_cohort.tsv"),
   paste0("All final-stage ", precision_count_label(precision_counts), " Intervals describe conditional Monte Carlo error."),
-  c("tableS6_control_quality.csv", "figS4A_control_diversity_by_length.csv", "figS4C_precision_tiles.csv"))
+  c("tableS6_control_quality.csv", "figS4B_precision_tiles.csv"), legend_notes = testable_control_note)
 
 # ---------------------------------------------------------------------------------------------
 # Figure S3. Positional robustness

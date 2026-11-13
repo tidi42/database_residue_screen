@@ -151,16 +151,22 @@ class ConditionalContrastTests(unittest.TestCase):
         rows = {(row["group"], row["measure"]): row for row in conditional_rows(self.outcomes(groups), specification, 2000)}
         self.assertEqual(len(rows), 8)
         self.assertTrue(all(row["holm_family_size"] == 8 for row in rows.values()))
+        alpha = 0.05 / 3
+        bgi = rows["BGI", "detection"]
+        self.assertAlmostEqual(float(bgi["interval_lower"]), (alpha / 2) ** (1 / 30), places=9)
+        self.assertEqual((bgi["tail_bound"], bgi["holm_bound"]), ("0", "0"))
         ont = rows["ONT", "detection"]
-        self.assertAlmostEqual(100 * float(ont["interval_lower"]), 21.282, places=3)
-        self.assertAlmostEqual(100 * float(ont["interval_upper"]), 23.649, places=3)
-        self.assertEqual(ont["holm_bound"][:5], "6.638")
-        self.assertTrue(ont["holm_bound"].endswith("e-214"))
-        self.assertAlmostEqual(float(rows["Illumina", "detection"]["holm_bound"]) / 2.24e-48, 1, places=2)
-        self.assertAlmostEqual(float(rows["BGI", "detection"]["holm_bound"]) / 3.152e-25, 1, places=3)
+        self.assertAlmostEqual(100 * float(ont["interval_lower"]), 23.4234, places=3)
+        self.assertAlmostEqual(100 * float(ont["interval_upper"]), 23.6471, places=3)
+        self.assertEqual(ont["holm_bound"][:5], "7.457")
+        self.assertTrue(ont["holm_bound"].endswith("e-513"))
+        self.assertTrue(rows["Illumina", "detection"]["holm_bound"].endswith("e-341"))
         pacbio = rows["PacBio", "detection"]
-        self.assertEqual(float(pacbio["holm_bound"]), 1.0)
-        self.assertAlmostEqual(100 * float(pacbio["interval_lower"]), -2.3526, places=3)
+        expected_tail = 6 * math.exp(2910 * math.log(1 - 1 / 194))
+        self.assertAlmostEqual(float(pacbio["tail_bound"]) / expected_tail, 1, places=9)
+        self.assertAlmostEqual(float(pacbio["holm_bound"]) / (5 * expected_tail), 1, places=9)
+        self.assertAlmostEqual(float(pacbio["interval_upper"]), 1 / 194, places=12)
+        self.assertEqual(float(rows["PacBio", "breadth"]["holm_bound"]), 1.0)
         self.assertEqual(float(ont["observed_reference_total"]), 70)
         self.assertAlmostEqual(float(ont["expected_reference_total"]), 2 / 15)
 

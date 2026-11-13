@@ -30,12 +30,13 @@ CATEGORIES = ("terminal", "synthetic_or_vector", "internal_or_ambiguous")
 SORT_KEYS = ("accession_version", "parent_id", "lower", "upper", "canonical_strand")
 SPECIFICATION_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["version", "matching_rule", "category_order", "terminal_window", "terminal_minimum_length", "flank_bases",
+    "required": ["version", "matching_rule", "query_testability", "category_order", "terminal_window", "terminal_minimum_length", "flank_bases",
                  "maximum_attempts_per_category", "maximum_selected_per_category", "sort_order", "no_repeated_selected_accession",
                  "internal_preferred_to_ambiguous", "synthetic_title_declarations", "synthetic_rule", "incomplete_or_unidentified",
                  "selection_basis"],
     "properties": {
-        "version": {"const": "record_triage_v1"}, "matching_rule": {"const": "strict_single_ungapped_full_query"},
+        "version": {"const": "record_triage_v2"}, "matching_rule": {"const": "strict_single_ungapped_full_query"},
+        "query_testability": {"const": "strict_testable_only"},
         "category_order": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"enum": list(CATEGORIES)}},
         "terminal_window": {"type": "integer", "minimum": 0}, "terminal_minimum_length": {"type": "integer", "minimum": 1},
         "flank_bases": {"type": "integer", "minimum": 0}, "maximum_attempts_per_category": {"type": "integer", "minimum": 1},
@@ -46,7 +47,8 @@ SPECIFICATION_SCHEMA = {
         "synthetic_rule": {"type": "string", "minLength": 1}, "incomplete_or_unidentified": {"type": "string", "minLength": 1},
         "selection_basis": {"type": "string", "minLength": 1}}}
 DEFAULT_SPECIFICATION = dict(
-    version="record_triage_v1", matching_rule="strict_single_ungapped_full_query", category_order=list(CATEGORIES),
+    version="record_triage_v2", matching_rule="strict_single_ungapped_full_query", query_testability="strict_testable_only",
+    category_order=list(CATEGORIES),
     terminal_window=500, terminal_minimum_length=10000, flank_bases=50, maximum_attempts_per_category=3,
     maximum_selected_per_category=1, sort_order=list(SORT_KEYS), no_repeated_selected_accession=True,
     internal_preferred_to_ambiguous=True,
@@ -76,7 +78,9 @@ def declaration_pattern(specification: dict) -> re.Pattern:
 
 
 def category_flags(event: dict, metadata: dict | None, linear_decision: tuple[str, str], completed: bool = True,
-                   specification: dict | None = None) -> dict:
+                   specification: dict | None = None, testable: bool = True) -> dict:
+    """Category eligibility of one strict event. Events of queries outside the strict testable set stay in the candidate
+    register but are eligible for no category."""
     specification = specification or selection_specification()
     exact = (not event["accession_version"].startswith("unresolved:") and event.get("identity_status") == "exact_version"
              and metadata is not None and metadata.get("accessionversion") == event["accession_version"]
@@ -85,12 +89,14 @@ def category_flags(event: dict, metadata: dict | None, linear_decision: tuple[st
     declaration = declaration_pattern(specification).match(title)
     genomic = exact and linear_decision[0] == "included"
     window, minimum = specification["terminal_window"], specification["terminal_minimum_length"]
-    return dict(evidence_complete=bool(exact),
-                terminal=bool(genomic and event["slen"] >= minimum and event["distance_to_end"] <= window),
-                synthetic_or_vector=bool(exact and declaration), internal=bool(genomic and event["distance_to_end"] > window),
-                ambiguous=bool(exact and linear_decision[0] == "unresolved"),
+    eligible = exact and testable
+    return dict(evidence_complete=bool(exact), strict_testable=bool(testable),
+                terminal=bool(eligible and genomic and event["slen"] >= minimum and event["distance_to_end"] <= window),
+                synthetic_or_vector=bool(eligible and declaration), internal=bool(eligible and genomic and event["distance_to_end"] > window),
+                ambiguous=bool(eligible and linear_decision[0] == "unresolved"),
                 synthetic_support="archived_title_explicit_context_declaration" if declaration else "none",
-                exclusion_reason="" if exact else "incomplete_or_missing_exact_version_length_metadata")
+                exclusion_reason=("incomplete_or_missing_exact_version_length_metadata" if not exact
+                                  else "query_outside_strict_testable_set" if not testable else ""))
 
 
 def choose_cases(candidates: list[dict], retrieve, specification: dict) -> tuple[list, list, list]:
@@ -282,6 +288,7 @@ def select_record_cases(analysis: Path, metadata: Path, search: Path, physical: 
     from .acceptance import validate_acceptance
     from .analysis import orientation_key, read_events
     from .eligibility import event_eligibility
+    from .outcomes import OUTCOME_SCHEMA
     from .panels import LOGICAL_SCHEMA
     from .search import STATUS_SCHEMA, object_digest
 
@@ -309,6 +316,9 @@ def select_record_cases(analysis: Path, metadata: Path, search: Path, physical: 
         if row["role"] == "real":
             aliases[row["parent_id"]].append(row)
     events = read_events(analysis, report)
+    testable = {row["parent_id"] for row in read_table(analysis / "outcomes.tsv", OUTCOME_SCHEMA)
+                if row["role"] == "real" and row["endpoint"] == "strict" and row["population"] == "all_records"
+                and row["applicability"] == "operational_retained_search"}
     selected = {(row["source_file"], row["source_row"]): row for row in events if row["query_id"] in aliases and row["strict"] == "yes"}
     traced = trace_hsps(search, selected)
     statuses = {row["query_id"]: row for row in read_table(analysis / "search_status.tsv", STATUS_SCHEMA)}
@@ -323,7 +333,8 @@ def select_record_cases(analysis: Path, metadata: Path, search: Path, physical: 
         record = records.get(event["accession_version"])
         decision = decisions[event["accession_version"], "linear_genomic"]
         flags = category_flags(event, record["payload"] if record else None, decision,
-                               statuses[event["query_id"]]["status"] in {"success_hits", "success_zero"}, specification)
+                               statuses[event["query_id"]]["status"] in {"success_hits", "success_zero"}, specification,
+                               event["query_id"] in testable)
         identifier = "candidate_" + object_digest(dict(event_key=list(event_key)))[:20]
         members = sorted(aliases[event["query_id"]], key=lambda row: row["logical_id"])
         candidates.append(dict(candidate_id=identifier, parent_id=event["query_id"], accession_version=event["accession_version"],

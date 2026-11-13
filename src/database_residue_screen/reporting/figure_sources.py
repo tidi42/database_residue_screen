@@ -2,6 +2,8 @@
 
 Built from the central metrics, the reports and the run's stage outputs only; no searches and no sequences other than
 run outputs. Union rows cover every panel condition. Excluded testability states count neither as 0 nor as 1.
+Result figures show testable queries only: the alignment-quality tables cover the HSPs of strict-testable reference
+sequences, and the control and query-property tables flag strict-testable parents (``strict_testable``).
 Tables are written at full precision; booleans as True/False. manifest.json lists the SHA-256 of every table, the
 inputs, the counts quoted in the figures and the positional policy.
 """
@@ -17,7 +19,7 @@ from ..controls import check_draw, dinucleotides, draw_seed
 from ..matching import strict_hsp, tolerant_hsp
 from ..outcomes import OUTCOME_SCHEMA, matched_population
 from ..positional import primary_positional_events
-from ..precision import grouped_half_width
+from ..precision import mean_interval
 from ..sequences import canonical, canonical_id, read_fasta
 from .common import (GLOBAL, GROUPS, group_key, load_analysis, new_directory, ordered_groups, read_tsv, sha256, verified_files,
                      verify_manifest, write_json, write_tsv)
@@ -35,6 +37,12 @@ DETECTION_FIELDS = ("scope", "order", "block", "group", "label", "min_length", "
 
 def write(path: Path, rows: list[dict], fields=None) -> None:
     write_tsv(path, rows, fields, boolean=BOOLEAN)
+
+
+def rule_testable_parents(outcomes: list[dict], endpoint: str = "strict") -> set[str]:
+    """Parents whose reference search is operational under the rule (a priori testable, all records)."""
+    return {row["parent_id"] for row in outcomes if row["role"] == "real" and row["endpoint"] == endpoint
+            and row["population"] == "all_records" and row["applicability"] == "operational_retained_search"}
 
 
 def detection_rows(metrics: Path) -> list[dict]:
@@ -92,7 +100,8 @@ def position_tables(analysis: Path, reports: Path) -> tuple[list, list, dict]:
     return points, sensitivity, policy
 
 
-def control_quality(design: Path, controls: Path, logical: list[dict]) -> tuple[list, list, list, list]:
+def control_quality(design: Path, controls: Path, logical: list[dict], testable: set[str]) -> tuple[list, list, list, list]:
+    """Control draw checks for every parent. Parent rows, summary counts and query properties flag the strict-testable parents."""
     report = verified_files(controls, read_json(controls / "control_qc.json"))
     originals = read_fasta(design / "physical_queries.fasta")
     parents = {canonical_id(sequence): canonical(sequence) for sequence in originals.values()}
@@ -119,17 +128,23 @@ def control_quality(design: Path, controls: Path, logical: list[dict]) -> tuple[
     parent_rows = []
     for parent_id, sequences in sorted(by_parent.items()):
         for group in ordered_groups(memberships[parent_id]):
-            parent_rows.append(dict(group=group, parent_id=parent_id, length=len(parents[parent_id]), draws=len(sequences),
+            parent_rows.append(dict(group=group, parent_id=parent_id, strict_testable=parent_id in testable, length=len(parents[parent_id]),
+                                    draws=len(sequences),
                                     distinct_exact=len(set(sequences)), distinct_canonical=len({canonical(sequence) for sequence in sequences}),
                                     repeated_exact=len(sequences) - len(set(sequences)),
                                     repeated_canonical=len(sequences) - len({canonical(sequence) for sequence in sequences}),
                                     parent_identical_exact=sum(sequence == parents[parent_id] for sequence in sequences),
                                     parent_identical_canonical=sum(canonical(sequence) == parents[parent_id] for sequence in sequences)))
+    repeated = {parent: len(values) - len({canonical(value) for value in values}) for parent, values in by_parent.items()}
     summary = dict(parents=len(by_parent), selected_draws=len(draw_rows), invariants_failed=0, unique_seeds=len({row["seed"] for row in draw_rows}),
-                   repeated_canonical=sum(len(values) - len({canonical(value) for value in values}) for values in by_parent.values()),
+                   repeated_canonical=sum(repeated.values()),
                    repeated_exact=sum(len(values) - len(set(values)) for values in by_parent.values()),
                    parent_identical_canonical=sum(row["parent_identical_canonical"] for row in draw_rows),
                    parent_identical_exact=sum(row["parent_identical_exact"] for row in draw_rows),
+                   testable_parents=sum(parent in testable for parent in by_parent),
+                   testable_draws=sum(row["parent_id"] in testable for row in draw_rows),
+                   testable_repeated_canonical=sum(count for parent, count in repeated.items() if parent in testable),
+                   testable_parent_identical_canonical=sum(row["parent_identical_canonical"] for row in draw_rows if row["parent_id"] in testable),
                    source_qc_sha256=sha256(controls / "control_qc.json"))
     properties, seen = [], set()
     for row in logical:
@@ -137,7 +152,8 @@ def control_quality(design: Path, controls: Path, logical: list[dict]) -> tuple[
             continue
         seen.add((row["parent_id"], row["group"], row["condition"]))
         sequence = parents[row["parent_id"]]
-        properties.append(dict(group=row["group"], condition=row["condition"], parent_id=row["parent_id"], length=len(sequence),
+        properties.append(dict(group=row["group"], condition=row["condition"], parent_id=row["parent_id"],
+                               strict_testable=row["parent_id"] in testable, length=len(sequence),
                                gc_fraction=(sequence.count("G") + sequence.count("C")) / len(sequence),
                                dominant_base=max(Counter(sequence).values()) / len(sequence), distinct_dinucleotides=len(dinucleotides(sequence))))
     return draw_rows, parent_rows, [summary], properties
@@ -167,11 +183,11 @@ def cap_tables(statuses: dict, logical: list[dict], outcomes: list[dict]) -> tup
     return rows, membership_rows
 
 
-def alignment_quality(search: Path, logical: list[dict], statuses: dict) -> tuple[list, list, list]:
-    """Identity and query-span distributions of every returned reference HSP, including rejected HSPs."""
+def alignment_quality(search: Path, logical: list[dict], statuses: dict, testable: set[str]) -> tuple[list, list, list]:
+    """Identity and query-span distributions of every returned HSP of the strict-testable reference sequences, rejected HSPs included."""
     groups = defaultdict(set)
     for row in logical:
-        if row["role"] == "real":
+        if row["role"] == "real" and row["parent_id"] in testable:
             groups[row["sequence_id"]].add(row["group"])
     marginal, joint, classes, by_query = Counter(), Counter(), Counter(), Counter()
     for _, row in search_hsps(search, set(groups)):
@@ -217,11 +233,10 @@ def fixed_prefix_precision(outcomes: list[dict], prefixes: list[int], target_lim
                     for prefix in prefixes:
                         selected = [row for parent in sorted(eligible) for row in controls[parent] if row["draw_index"] <= prefix]
                         estimate = statistics.mean(row[field] for row in selected) if selected else None
-                        radius = grouped_half_width([row["seed"] for row in selected], alpha, bound) if selected else None
+                        lower, upper, _ = (mean_interval([row[field] for row in selected], [row["seed"] for row in selected], alpha, bound)
+                                           if selected else (None, None, None))
                         rows.append(dict(group=group, endpoint=endpoint, population=population, measure=measure, draws_per_parent=prefix,
-                                         planned=len(original), matched=len(eligible), estimate=estimate,
-                                         lower=max(0, estimate - radius) if selected else None,
-                                         upper=min(bound, estimate + radius) if selected else None,
+                                         planned=len(original), matched=len(eligible), estimate=estimate, lower=lower, upper=upper,
                                          status="fixed_final_resolved_subset_diagnostic_no_new_coverage_claim"))
     return rows
 
@@ -286,9 +301,10 @@ def build_figure_sources(destination: Path, *, metrics: Path, reports: Path, ana
     destination = new_directory(destination)
     precision = read_tsv(inference / "precision.tsv")
     prefixes = sorted({int(row["draws_per_parent"]) for row in precision})
-    draw_rows, parent_rows, qc_summary, properties = control_quality(design, controls, logical)
+    strict_testable = rule_testable_parents(outcomes, "strict")
+    draw_rows, parent_rows, qc_summary, properties = control_quality(design, controls, logical, strict_testable)
     caps, cap_memberships = cap_tables(statuses, logical, outcomes)
-    quality, joint, accepted = alignment_quality(search, logical, statuses)
+    quality, joint, accepted = alignment_quality(search, logical, statuses, strict_testable)
     benchmark_metrics, spikes, benchmark_reports = benchmark_tables(benchmarks)
     points, sensitivity, policy = position_tables(analysis, reports)
     flow_scopes = read_tsv(reports / "eligibility" / "eligibility_flow.tsv")
@@ -333,6 +349,10 @@ def build_figure_sources(destination: Path, *, metrics: Path, reports: Path, ana
     real = [row for row in logical if row["role"] == "real"]
     counts = dict(physical_references=len(real), canonical_parents=len({row["parent_id"] for row in real}),
                   conditions=len({row["condition"] for row in real}), controls=sum(row["role"] == "control" for row in logical),
+                  strict_testable_parents=len(strict_testable), tolerant_testable_parents=len(rule_testable_parents(outcomes, "tolerant")),
+                  strict_testable_reference_hsps=sum(statuses[sequence]["hsp_rows"] for sequence in
+                                                     {row["sequence_id"] for row in real if row["parent_id"] in strict_testable}
+                                                     if sequence in statuses),
                   draws_per_parent=draws, distinct_searches=len(statuses), testable_strict_accessions=totals["resolved_identifiers"],
                   positional_events=len(points), cap_sequences=len(caps))
     files = {path.name: sha256(path) for path in sorted(destination.iterdir()) if path.is_file()}

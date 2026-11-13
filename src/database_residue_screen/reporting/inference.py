@@ -1,7 +1,7 @@
 """Inference summary: conditional reference-versus-generator bounds and control precision.
 
 Conditional bounds: the group-by-measure slots (strict, all records; detection and breadth per platform group) of the conditional
-Hoeffding contrasts with Holm adjustment over the full family (non-estimable slots stay in the family). The bound is
+relative-entropy Hoeffding contrasts with Holm adjustment over the full family (non-estimable slots stay in the family). The bound is
 stage-protected over the declared draw prefixes (5, 10 and 15 control draws per parent). These are Monte Carlo bounds
 of the shuffle-generator mean for fixed reference sequences, not contamination, exchangeability or generalisation tests.
 Control precision: every fixed-prefix precision row (groups, conditions, global union, endpoints, populations) with its status and the

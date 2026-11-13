@@ -150,8 +150,9 @@ require_complete_retrieval = true
 diagnostic_window = 25
 
 [record_cases]
-version = "record_triage_v1"
+version = "record_triage_v2"
 matching_rule = "strict_single_ungapped_full_query"
+query_testability = "strict_testable_only"
 category_order = ["terminal", "synthetic_or_vector", "internal_or_ambiguous"]
 terminal_window = 500
 terminal_minimum_length = 10000

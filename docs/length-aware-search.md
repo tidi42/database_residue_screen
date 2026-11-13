@@ -205,7 +205,8 @@ a-priori testable cohort (`primary_testable`) and, as a diagnostic only, ungated
 **Conditional contrasts.** `assess-precision` also writes
 `conditional_contrasts.tsv` for the largest declared draw prefix: per group, strict
 all-record detection and breadth, D = reference mean - control generator mean, the
-stage-protected Hoeffding interval and tail bound min(1, 2K exp(-2D^2/(B^2 sum w^2))),
+stage-protected relative-entropy Hoeffding interval over n seed streams and the tail bound
+min(1, 2K exp(-n kl(control/B || reference/B))),
 Holm adjustment over all group-by-measure slots (non-estimable slots retained as one),
 and observed versus generator-expected reference totals. These are Monte Carlo
 bounds for fixed sequences, not exchangeability, contamination or generalisation
