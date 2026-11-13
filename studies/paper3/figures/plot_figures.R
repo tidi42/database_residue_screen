@@ -795,6 +795,9 @@ record_case_panel <- function(row) {
   subject <- strsplit(paste0(left_shown, row$subject_sequence, right_shown), "")[[1]]
   query <- c(rep(NA, nchar(left_shown)), strsplit(row$query_sequence, "")[[1]], rep(NA, nchar(right_shown)))
   roles <- c(rep("flank", nchar(left_shown)), strsplit(row$segment_roles, ";", fixed = TRUE)[[1]], rep("flank", nchar(right_shown)))
+  # Panel segment kinds: barcodes and indexes are drawn as barcode, all other designed segments as scaffold.
+  roles[roles == "index"] <- "barcode"
+  roles[roles %in% c("front", "rear", "hairpin", "oligo", "a_tail")] <- "scaffold"
   roles[!roles %in% names(role_colours)] <- "unknown"
   dx <- min(alignment_dx, (figure_width_mm - alignment_x0 - 2) / length(subject))
   positions <- seq_along(subject)

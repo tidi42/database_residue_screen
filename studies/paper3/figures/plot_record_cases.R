@@ -72,6 +72,9 @@ draw_case <- function(row, index, top) {
   write_text(paste0(LETTERS[index], "  ", category_label, ": ", row$accession_version), 6, top, 10, TRUE)
   roles <- strsplit(row$display_segment_roles, ";", fixed = TRUE)[[1]]
   stopifnot(length(roles) == nchar(row$qseq), row$qseq == row$sseq)
+  # Panel segment kinds: barcodes and indexes are drawn as barcode, all other designed segments as scaffold.
+  roles[roles == "index"] <- "barcode"
+  roles[roles %in% c("front", "rear", "hairpin", "oligo", "a_tail")] <- "scaffold"
   roles[!roles %in% names(role_colours)] <- "unknown"
   query_label <- paste0("Query: ", row$query_id, "  |  ", nchar(row$qseq), "-nt strict exact match")
   write_text(query_label, 6, top + 5, 7.7)
