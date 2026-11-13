@@ -30,21 +30,22 @@ from .common import (EXCLUDED_STATES, GLOBAL, NE, load_analysis, mean, new_direc
 CONTRACT = "publication_metrics_v1"
 OPERATIONAL = "operational_retained_search"
 # (group, label, members): a member is a condition, optionally qualified by a construct class ("condition:class").
+# Labels are unique within a group; figures show them as "group / label".
 DISPLAY_CLASSES = (
-    ("ONT", "24-nt barcode (Native panel)", ("ont_barcode",)),
-    ("ONT", "Native barcode context K40", ("ont_native_barcode_context_k40",)),
-    ("ONT", "Native barcode context K46", ("ont_native_barcode_context_k46",)),
-    ("ONT", "Rapid barcode context (90 nt)", ("ont_rapid_barcode_context_90",)),
-    ("ONT", "Standalone adapters", ("ont_ligation_adapter", "ont_rapid_adapter", "ont_pcr_adapter", "ont_cdna_adapter")),
-    ("Illumina", "Bare i7", ("illumina_i7_index",)),
-    ("Illumina", "Bare i5", ("illumina_i5_index",)),
-    ("Illumina", "Embedded i7", ("illumina_i7_index_adapter",)),
-    ("Illumina", "Embedded i5", ("illumina_i5_index_adapter",)),
-    ("Illumina", "Adapters / primers", ("illumina_truseq", "illumina_nextera", "illumina_smallrna")),
-    ("BGI/DNBSEQ", "BGI/DNBSEQ references", ("illumina_bgi",)),
-    ("PacBio", "Barcode", ("pacbio_barcode",)),
-    ("PacBio", "One-sided tag + hairpin", ("pacbio_barcode_adapter",)),
-    ("PacBio", "SMRTbell", ("pacbio_smrtbell_adapter:adapter",)),
+    ("ONT", "Native barcodes", ("ont_barcode",)),
+    ("ONT", "K40 contexts", ("ont_native_barcode_context_k40",)),
+    ("ONT", "K46 contexts", ("ont_native_barcode_context_k46",)),
+    ("ONT", "Rapid barcode contexts", ("ont_rapid_barcode_context_90",)),
+    ("ONT", "Adapters and primers", ("ont_ligation_adapter", "ont_rapid_adapter", "ont_pcr_adapter", "ont_cdna_adapter")),
+    ("Illumina", "Bare i7 indexes", ("illumina_i7_index",)),
+    ("Illumina", "Bare i5 indexes", ("illumina_i5_index",)),
+    ("Illumina", "Embedded i7 indexes", ("illumina_i7_index_adapter",)),
+    ("Illumina", "Embedded i5 indexes", ("illumina_i5_index_adapter",)),
+    ("Illumina", "Adapters and primers", ("illumina_truseq", "illumina_nextera", "illumina_smallrna")),
+    ("BGI/DNBSEQ", "Adapters", ("illumina_bgi",)),
+    ("PacBio", "Barcodes", ("pacbio_barcode",)),
+    ("PacBio", "Barcode-hairpin queries", ("pacbio_barcode_adapter",)),
+    ("PacBio", "SMRTbell adapter", ("pacbio_smrtbell_adapter:adapter",)),
     ("PacBio", "C2 primer", ("pacbio_smrtbell_adapter:primer", "pacbio_c2_primer")),
 )
 DEFAULT_CHANCE_LIMIT_VARIANTS = (("stricter", 0.001, 0.01), ("looser", 0.05, 0.10))
@@ -82,8 +83,8 @@ def parse_display_classes(classes=None) -> list[dict]:
                 raise ContractError(f"Display class {label!r}: empty member")
             selectors.append((condition, construct or None))
         result.append(dict(order=number, group=group, label=label, selectors=tuple(selectors), declared=True))
-    if len({row["label"] for row in result}) != len(result):
-        raise ContractError("Display class labels must be unique")
+    if len({(row["group"], row["label"]) for row in result}) != len(result):
+        raise ContractError("Display class labels must be unique within a group")
     return result
 
 

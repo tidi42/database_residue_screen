@@ -28,6 +28,7 @@ if (nrow(cases)) {
     all(verification$record_window_equals_hsp), all(verification$hsp_full_length_exact),
     all(verification$packet_identical | is.na(verification$packet_identical)))
   cases$organism_italic <- verification$organism_italic
+  cases$packet_identical <- verification$packet_identical
 }
 if (!dir.exists(output)) dir.create(output, recursive = TRUE)
 width_mm <- 180
@@ -66,13 +67,13 @@ write_species <- function(organism, rest, xpos, top, size, italic) {
 }
 
 draw_case <- function(row, index, top) {
-  category_label <- switch(row$category, terminal = "Terminal match", synthetic_or_vector = "Expected vector context",
+  category_label <- switch(row$category, terminal = "Terminal match", synthetic_or_vector = "Synthetic or vector record",
     internal_or_ambiguous = "Internal match", row$category)
   write_text(paste0(LETTERS[index], "  ", category_label, ": ", row$accession_version), 6, top, 10, TRUE)
   roles <- strsplit(row$display_segment_roles, ";", fixed = TRUE)[[1]]
   stopifnot(length(roles) == nchar(row$qseq), row$qseq == row$sseq)
   roles[!roles %in% names(role_colours)] <- "unknown"
-  query_label <- paste0("Query: ", row$query_id, "  |  ", nchar(row$qseq), " nt, strict exact support")
+  query_label <- paste0("Query: ", row$query_id, "  |  ", nchar(row$qseq), "-nt strict exact match")
   write_text(query_label, 6, top + 5, 7.7)
   title_lines <- strwrap(row$title, width = 100)
   for (line_index in seq_along(title_lines)) {
@@ -89,7 +90,7 @@ draw_case <- function(row, index, top) {
   coordinate_label <- paste0("Subject ", format(row$lower, big.mark = ",", scientific = FALSE), "\u2013",
     format(row$upper, big.mark = ",", scientific = FALSE), " (", ifelse(row$display_orientation == "-", "minus", "plus"), " orientation) / ",
     format(row$record_length, big.mark = ",", scientific = FALSE), " nt, ",
-    if (row$topology == "circular") "circular origin is not a physical end" else
+    if (row$topology == "circular") "circular record, position 1 is its stored origin" else
       paste(format(row$distance_to_end, big.mark = ",", scientific = FALSE), "nt from nearest record end"))
   write_text(coordinate_label, 6, top + 21, 7.1)
   grid.lines(x = unit(c(16, 168), "mm"), y = unit(rep(height_mm - top - track_offset, 2), "mm"), gp = gpar(col = "grey60", lwd = 1))
@@ -125,24 +126,22 @@ draw_case <- function(row, index, top) {
         colour = if (base_roles[base] == "flank") "grey80" else role_colours[base_roles[base]], family = "mono", just = "centre")
     }
   }
-  interpretation <- switch(row$category,
-    terminal = "Triage: investigate assembly/library history. Verified terminal support does not confirm contamination.",
-    synthetic_or_vector = "Triage: archived title explicitly declares a cloning vector, and support is compatible with intended construct content.",
-    internal_or_ambiguous = "Triage: internal motif support remains compatible with shared sequence or record processing. Attribution is unresolved.")
-  lines <- strwrap(interpretation, width = 109)
+  # Verification result of this case (every check is asserted above from record_case_verification.tsv), one sentence per line.
+  lines <- c("Verified: exact full-length HSP of the searched query. The record sequence at these coordinates equals the HSP.",
+    if (isTRUE(row$packet_identical)) "The archived record sequence is identical.")
   for (line_index in seq_along(lines)) write_text(lines[line_index], 6, top + interpretation_offset + 3.4 * (line_index - 1), 7.3)
   if (index < nrow(cases)) grid.lines(x = unit(c(6, 174), "mm"), y = unit(rep(height_mm - top - separator_offset, 2), "mm"), gp = gpar(col = "grey80", lwd = 0.5))
 }
 
 draw_figure <- function() {
   grid.newpage()
-  write_text("Illustrative triage cases", 6, 6, 11, TRUE)
-  write_text("Deterministic strict matches, exact-version local sequence verification, not biological adjudication.", 6, 12, 7.8)
+  write_text("Record cases", 6, 6, 11, TRUE)
+  write_text("Deterministically selected strict matches with exact-version local sequence verification.", 6, 12, 7.8)
   if (nrow(cases)) for (index in seq_len(nrow(cases))) draw_case(cases[index, ], index, case_start + case_pitch * (index - 1))
   footer_top <- if (compact) case_start + 3 * case_pitch + 3 else 246
-  write_text("S: subject. Q: searched (canonical) query orientation (verified at sequence level for each case).", 6, footer_top, 7.1)
-  write_text("Gray bases: record flanks (up to 50 nt), clipped at stored record boundaries. Slate: scaffold; burgundy: barcode or index. Marker: platform color.", 6, footer_top + 5, 7.1)
-  write_text("Query source and record-origin uncertainty remain explicit. Selection and complete evidence accompany this figure.", 6, footer_top + 10, 6.8)
+  write_text("S: subject. Q: query in the searched (canonical) orientation.", 6, footer_top, 7.1)
+  write_text("Gray bases: record flanks (up to 50 nt), clipped at stored record boundaries. Slate: scaffold. Burgundy: barcode or index. Marker: platform color.", 6, footer_top + 5, 7.1)
+  write_text("Selection rules and complete case evidence: Table S8.", 6, footer_top + 10, 6.8)
 }
 
 for (extension in c("pdf", "png")) {

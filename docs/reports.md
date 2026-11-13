@@ -30,7 +30,7 @@ input. Code: [reporting/](../src/database_residue_screen/reporting/).
 | `metrics.json` | Counts of the analysed panel, chance-limit pairs with their testable lengths, exact-score panel, zero-search accounting, global detection. |
 | `cohorts.tsv` | Native and common cohorts per scope (global, group, display class, condition), endpoint, population and measure: eligible parents, reference positives, control rates. |
 | `table1_source.tsv` | Detection rows of every scope for both cohorts (source of Table 1). |
-| `display_classes.tsv` | Display classes of Table 1 (`[metrics] display_classes`; default: built-in Paper 3 classes) with members, parents and lengths. |
+| `display_classes.tsv` | Display classes of Table 1 (`[metrics] display_classes`; default: built-in Paper 3 classes) with members, parents and lengths. Labels are unique within a group. |
 | `cohort_membership.tsv` | Cohort membership of every parent. |
 | `attrition.tsv` | Per group, endpoint, population and measure: planned parents and the count at every exclusion step. |
 | `testability.tsv` | A priori class per query length and endpoint under every chance-limit pair, with the panel at that length. |

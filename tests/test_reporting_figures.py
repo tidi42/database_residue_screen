@@ -75,9 +75,10 @@ class FigureSourceTests(FigureSourceCase):
         # 11 display classes, 4 platform unions and the global union; 2 populations x 2 rules x 2 cohorts each.
         self.assertEqual(len(detection), 16 * 8)
         self.assertEqual({row["block"] for row in detection}, {"Reference classes", "Platform unions"})
-        metrics = {(row["label"], row["population"], row["endpoint"], row["cohort"]): row for row in table(self.metrics / "table1_source.tsv")}
+        key = ("scope", "group", "label", "population", "endpoint", "cohort")
+        metrics = {tuple(row[name] for name in key): row for row in table(self.metrics / "table1_source.tsv")}
         for row in detection:
-            source = metrics[row["label"], row["population"], row["endpoint"], row["cohort"]]
+            source = metrics[tuple(row[name] for name in key)]
             self.assertEqual((row["eligible_parents"], row["reference_positive"], row["control_positive"]),
                              (source["eligible_parents"], source["reference_positive"], source["control_positive"]))
 
@@ -125,7 +126,7 @@ class FigureBuildTests(FigureSourceCase):
         manifest = json.loads((first / "figures_manifest.json").read_text())
         self.assertEqual(manifest["contract"], "publication_figures_v1")
         for name in ("paper3_figure1.png", "paper3_figureS4.pdf", "paper3_manuscript_Figure5.png", "tables/table1_reference_classes.csv",
-                     "tables/tableS7A_target_limit_summary.csv"):
+                     "tables/tableS10_target_limit_summary.csv"):
             self.assertIn(name, manifest["files"])
         self.assertIn("content_sha256", manifest["files"]["paper3_figure1.pdf"])
         artwork = json.loads((first / "paper3_figure_manifest.json").read_text())

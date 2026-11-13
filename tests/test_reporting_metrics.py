@@ -89,14 +89,16 @@ class DenominatorTests(MetricsCase):
                 self.assertAlmostEqual(float(mine["reference_mean"]), float(row["real_mean_breadth"]))
 
     def test_table1_display_classes_and_conditions(self):
-        classes = {row["label"]: row for row in table(self.metrics / "display_classes.tsv")}
-        self.assertEqual(list(classes), ["24-nt barcode (Native panel)", "Native barcode context K40", "Standalone adapters", "Bare i7",
-                                         "Embedded i7", "Adapters / primers", "BGI/DNBSEQ references", "Barcode", "One-sided tag + hairpin",
-                                         "SMRTbell", "C2 primer"])
-        # Two physical IDs (forward and reverse complement) form one canonical parent.
-        self.assertEqual((classes["Bare i7"]["physical_ids"], classes["Bare i7"]["canonical_parents"]), ("3", "2"))
+        classes = {(row["group"], row["label"]): row for row in table(self.metrics / "display_classes.tsv")}
+        self.assertEqual(list(classes), [("ONT", "Native barcodes"), ("ONT", "K40 contexts"), ("ONT", "Adapters and primers"),
+                                         ("Illumina", "Bare i7 indexes"), ("Illumina", "Embedded i7 indexes"), ("Illumina", "Adapters and primers"),
+                                         ("BGI/DNBSEQ", "Adapters"), ("PacBio", "Barcodes"), ("PacBio", "Barcode-hairpin queries"),
+                                         ("PacBio", "SMRTbell adapter"), ("PacBio", "C2 primer")])
+        # Two queries (forward and reverse complement) form one canonical parent.
+        bare_i7 = classes["Illumina", "Bare i7 indexes"]
+        self.assertEqual((bare_i7["physical_ids"], bare_i7["canonical_parents"]), ("3", "2"))
         # The C2 primer shares its condition with the SMRTbell adapter and is separated by construct class.
-        self.assertEqual(classes["C2 primer"]["members"], "pacbio_smrtbell_adapter:primer;pacbio_c2_primer")
+        self.assertEqual(classes["PacBio", "C2 primer"]["members"], "pacbio_smrtbell_adapter:primer;pacbio_c2_primer")
         self.assertTrue(all(row["declared"] == "yes" for row in classes.values()))
         c2 = self.one("table1_source.tsv", scope="class", label="C2 primer", endpoint="strict", population="all_records", cohort="native")
         self.assertEqual((c2["planned_parents"], c2["eligible_parents"], c2["reference_positive"], c2["target_limited"]), ("1", "1", "0", "1"))
@@ -122,6 +124,8 @@ class DenominatorTests(MetricsCase):
         self.assertIn("pacbio_smrtbell_adapter (primer)", {row["label"] for row in rows if row["declared"] == "no"})
         with self.assertRaises(ContractError):
             parse_display_classes([("ONT", "Same", ("a",)), ("ONT", "Same", ("b",))])
+        # The same label may name one class in each of two groups.
+        self.assertEqual(len(parse_display_classes([("ONT", "Same", ("a",)), ("Illumina", "Same", ("b",))])), 2)
 
     def test_conversion_against_own_controls(self):
         row = self.one("conversion.tsv", cohort="testable", scope="global", population="all_records")
