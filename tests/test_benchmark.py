@@ -123,6 +123,21 @@ class IndependentReferenceTests(unittest.TestCase):
             self.assertEqual(independent_hsp_truth(row, sequence, subject), expected)
             self.assertEqual(dict(strict=strict_hsp(row), tolerant=tolerant_hsp(row)), expected)
 
+    def test_single_base_subject_span_is_accepted_in_either_orientation(self):
+        # BLAST+ 2.17.0 reports a one-base minus-strand HSP with sstart == send and sstrand "plus" (XML hit frame -1).
+        query, subject = "ACGTTGCA" * 3, "GGGGAGGGG"
+        values = dict(qseqid="query", sseqid="FIX000001.1", staxids="0", sscinames="", pident=100, length=1,
+                      qlen=len(query), qcovs=4, mismatch=0, gapopen=0, qstart=4, qend=4, sstart=5, send=5,
+                      slen=len(subject), evalue=1e11, bitscore=2.5, stitle="fixture", qseq="T", sseq="T", btop="1",
+                      sstrand="plus", qcovhsp=4)
+        row = parse_blast_hsp([str(values[field]) for field in BLAST_FIELDS], {"query": query})
+        self.assertEqual(independent_hsp_truth(row, query, subject), dict(strict=False, tolerant=False))
+        self.assertEqual(dict(strict=strict_hsp(row), tolerant=tolerant_hsp(row)), dict(strict=False, tolerant=False))
+        plus = dict(row, sseq="A", qseq="A", qstart=1, qend=1)
+        self.assertEqual(independent_hsp_truth(plus, query, subject), dict(strict=False, tolerant=False))
+        with self.assertRaises(ValueError):
+            independent_hsp_truth(dict(row, sseq="C"), query, subject)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -82,6 +82,10 @@ def independent_hsp_truth(row: dict, query: str, subject: str) -> dict:
         expected_query = reverse_complement(expected_query)
     if subject_start > subject_end:
         expected_subject = reverse_complement(expected_subject)
+    # Tabular BLAST+ output cannot express the strand of a single-base subject span: sstart == send and sstrand reads
+    # "plus" even when the XML hit frame is -1. Such a span is checked in the orientation that its aligned base takes.
+    if subject_start == subject_end and aligned_subject.replace("-", "") == reverse_complement(expected_subject):
+        expected_subject = reverse_complement(expected_subject)
     if aligned_query.replace("-", "") != expected_query or aligned_subject.replace("-", "") != expected_subject:
         raise ValueError("Raw aligned strings disagree with the fixture sequence")
     if len(aligned_query) != len(aligned_subject):
